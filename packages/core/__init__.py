@@ -1,11 +1,10 @@
 """
-Backward-compatible re-exports from core.schemas.
+SnowClaw Core — shared data structures for the SnowClaw pipeline.
 
-All schema types now live in packages/core/schemas.py.
-This module re-exports them so existing biomechanics imports continue to work.
+All packages import schema types from here to keep the dependency graph clean.
 """
 
-from core.schemas import (
+from .schemas import (
     Discipline,
     Frame,
     Pose3D,

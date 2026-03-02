@@ -26,7 +26,8 @@ from .metrics import (
     counter_rotation,
 )
 from .snow_iq import SnowIQCalculator, SkillScores, SnowIQResult, Level
-from .schemas import Pose3D, Frame, TurnPhase, SessionMetrics
+# Re-export shared types from core for backward compatibility
+from core.schemas import Pose3D, Frame, TurnPhase, SessionMetrics
 from .turn_segmentation import segment_turns
 
 __all__ = [

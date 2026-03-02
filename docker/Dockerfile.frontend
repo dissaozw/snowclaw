@@ -1,0 +1,19 @@
+# SnowClaw 3D Viewer — frontend build
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+COPY packages/viewer-3d/package.json packages/viewer-3d/package-lock.json* ./
+RUN npm install
+
+COPY packages/viewer-3d/ .
+RUN npm run build
+
+# Serve with a lightweight static server
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Proxy API requests to the backend
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 3000
