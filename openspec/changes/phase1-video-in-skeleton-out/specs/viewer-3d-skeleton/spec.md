@@ -39,6 +39,17 @@ The system SHALL display the current frame's basic metrics (knee angle, inclinat
 - **WHEN** the user orbits the skeleton at frame N
 - **THEN** the metrics panel SHALL show the metric values for frame N
 
+### Requirement: Standalone mode with local data
+The viewer SHALL support a standalone mode that loads pose data from a local JSON file, without requiring the API backend to be running. This enables quick testing and offline use.
+
+#### Scenario: Load local poses file
+- **WHEN** the viewer is started with `npm run dev -- --data ./poses.json`
+- **THEN** the viewer SHALL load and render the skeleton data from the local file
+
+#### Scenario: Load from API
+- **WHEN** the viewer is started without `--data` and an API URL is configured
+- **THEN** the viewer SHALL fetch pose data from the API endpoint
+
 ### Requirement: Skeleton-only scope
 The viewer SHALL render skeleton wireframe only. Body mesh, snow surface reconstruction, and ski/snowboard geometry are explicitly out of scope for Phase 1.
 

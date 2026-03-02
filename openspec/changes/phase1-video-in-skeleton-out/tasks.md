@@ -67,7 +67,8 @@
 - [ ] 8.4 Implement flat grid ground plane at y=0 as spatial reference
 - [ ] 8.5 Implement frame scrubber / timeline (slider + play/pause)
 - [ ] 8.6 Implement metrics panel: current frame's knee angle, inclination, COM height
-- [ ] 8.7 Fetch pose data from API (`/api/results/{job_id}/poses`) and render
+- [ ] 8.7 Implement standalone mode: load pose data from local JSON file (no API needed)
+- [ ] 8.8 Implement API mode: fetch pose data from `/api/results/{job_id}/poses`
 
 ## 9. FastAPI Backend
 
@@ -80,20 +81,29 @@
 - [ ] 9.7 Implement result cleanup (delete after configurable retention period)
 - [ ] 9.8 Write API tests (upload, status, results, error cases)
 
-## 10. Docker & GPU Deployment
+## 10. CLI Tool & Sample Data
 
-- [ ] 10.1 Create `Dockerfile` based on NVIDIA CUDA base image with Python, FFmpeg, ONNX Runtime GPU
-- [ ] 10.2 Add model weight download step to Docker build (pre-warm ViTPose+ and MotionBERT in image)
-- [ ] 10.3 Create `Dockerfile.frontend` for the 3D viewer (Node.js + Vite build)
-- [ ] 10.4 Create `docker-compose.yml` — API server, Celery worker (GPU), Redis, frontend. Single `docker compose up`
-- [ ] 10.5 Configure NVIDIA Container Toolkit GPU passthrough in compose
-- [ ] 10.6 Add CPU fallback: detect GPU availability, warn if falling back to CPU
-- [ ] 10.7 Write GPU cloud deployment guide (AWS, GCP, RunPod, Lambda Labs)
+- [ ] 10.1 Implement `python -m snowclaw.cli process <video> --output-dir <dir>` — runs full pipeline without web stack
+- [ ] 10.2 CLI outputs: `annotated.mp4` + `poses.json` (per-frame Pose3D array with timestamps)
+- [ ] 10.3 Add a sample ski video (5-10s, public domain) to `data/samples/` for testing
+- [ ] 10.4 Write CLI tests (valid video, invalid path, output directory creation)
 
-## 11. Integration & End-to-End
+## 11. Docker & GPU Deployment
 
-- [ ] 11.1 Integration test: mock backends → annotated video is produced
-- [ ] 11.2 Integration test: mock backends → 3D viewer receives valid pose JSON
-- [ ] 11.3 Run full test suite (`pytest -v`) — all packages pass
-- [ ] 11.4 Docker build + `docker compose up` → full stack starts with GPU
-- [ ] 11.5 Manual end-to-end: upload real ski video → annotated video + working 3D viewer
+- [ ] 11.1 Create `Dockerfile` based on NVIDIA CUDA base image with Python, FFmpeg, ONNX Runtime GPU
+- [ ] 11.2 Add model weight download step to Docker build (pre-warm ViTPose+ and MotionBERT in image)
+- [ ] 11.3 Create `Dockerfile.frontend` for the 3D viewer (Node.js + Vite build)
+- [ ] 11.4 Create `docker-compose.yml` — API server, Celery worker (GPU), Redis, frontend. Single `docker compose up`
+- [ ] 11.5 Configure NVIDIA Container Toolkit GPU passthrough in compose
+- [ ] 11.6 Add CPU fallback: detect GPU availability, warn if falling back to CPU
+- [ ] 11.7 Write GPU cloud deployment guide (AWS, GCP, RunPod, Lambda Labs)
+
+## 12. Integration & End-to-End Testing
+
+- [ ] 12.1 Integration test: mock backends → annotated video is produced
+- [ ] 12.2 Integration test: mock backends → 3D viewer receives valid pose JSON
+- [ ] 12.3 Run full test suite (`pytest -v`) — all packages pass
+- [ ] 12.4 CLI test: `python -m snowclaw.cli process data/samples/ski_demo.mp4 --output-dir ./results/` → verify annotated.mp4 and poses.json
+- [ ] 12.5 Viewer test: `npm run dev -- --data ./results/poses.json` → verify skeleton renders, orbit works, scrubber works
+- [ ] 12.6 Docker test: `docker compose up` → full stack starts, upload via browser works
+- [ ] 12.7 Full end-to-end: upload sample video via web UI → watch annotated video → orbit 3D skeleton
