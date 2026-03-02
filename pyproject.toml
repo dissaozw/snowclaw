@@ -16,11 +16,34 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov"]
+dev = ["pytest>=7.0", "pytest-cov", "ruff>=0.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]
 python_files = ["test_*.py"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+src = ["packages"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "NPY", # NumPy-specific rules
+]
+ignore = [
+    "E501", # line too long (formatter handles this)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["biomechanics"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["packages"]
