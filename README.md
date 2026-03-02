@@ -79,6 +79,13 @@ This project includes Claude Code skills for code quality and spec-driven develo
 
 ### OpenSpec (Spec-Driven Development)
 
+OpenSpec requires Node.js 20.19.0+ and a one-time global install:
+
+```bash
+npm install -g @fission-ai/openspec@latest
+openspec init
+```
+
 | Command | Description |
 |---------|-------------|
 | `/opsx:propose` | Create a change proposal with specs, design, and task checklist |
