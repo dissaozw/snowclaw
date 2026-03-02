@@ -2,20 +2,22 @@
 
 SnowCoach AI has a complete biomechanics engine (`packages/biomechanics/`) that computes skiing/snowboarding metrics from `Pose3D` objects, but no way to produce those objects from raw video. The ML pipeline defined in PLAN.md §3-4 has six stages; this change implements stages 1-3 (video preprocessing, 2D pose, 3D lifting) and wires them together.
 
-The existing `biomechanics` package is pure NumPy with no ML dependencies. This boundary must be preserved — ML-heavy code lives in separate packages with isolated dependencies.
+Shared data structures (`Pose3D`, `Frame`, `Discipline`, etc.) currently live in `biomechanics.schemas`. This creates unwanted coupling — `pose-estimation` would need to import from `biomechanics` just to reference `Pose3D`, even though pose estimation has nothing to do with biomechanical analysis. The AGENTS.md repo structure already plans a `packages/core/` for "Shared types, configs, utilities." This change realizes that plan.
 
-**Current state:** Video → _(gap)_ → `Pose3D` → Biomechanics metrics
-**Target state:** Video → Frames → 2D Keypoints → 3D Pose (`Pose3D`) → Biomechanics metrics
+**Current state:** Video → _(gap)_ → `Pose3D` (defined in biomechanics) → Biomechanics metrics
+**Target state:** Video → Frames → 2D Keypoints → `core.Pose3D` → _(any consumer: biomechanics, viewer, API, etc.)_
 
 ## Goals / Non-Goals
 
 **Goals:**
+- Create `packages/core/` with shared data structures that all packages can import independently
+- Refactor `biomechanics` to import schemas from `core` (no logic changes)
 - Extract frames from video files at configurable FPS with resolution normalization
 - Detect 2D human keypoints from frames using a pluggable model backend
 - Lift 2D keypoint sequences to 3D with temporal consistency
-- Output `biomechanics.Pose3D` objects directly consumable by the existing metrics engine
+- Output `core.Pose3D` objects — consumable by biomechanics, viewer, API, or any other package
 - Define abstract interfaces so model backends are swappable without changing downstream code
-- Provide a single `Pipeline` entry point: `video path → SessionMetrics + Frame[]`
+- Provide a single `Pipeline` entry point: `video path → list[core.Pose3D]`
 
 **Non-Goals:**
 - SMPL-X mesh recovery (Phase 2)
@@ -24,26 +26,35 @@ The existing `biomechanics` package is pure NumPy with no ML dependencies. This 
 - Real-time / streaming inference (batch processing only for Phase 1)
 - Model training or fine-tuning — we wrap pretrained checkpoints
 - FastAPI backend or 3D viewer (separate changes)
+- Baking biomechanical analysis into the pipeline — consumers compose it themselves
 
 ## Decisions
 
-### 1. Two separate packages, not one
+### 1. Shared types in `packages/core/`, not in `biomechanics`
 
-**Decision:** `video-pipeline` and `pose-estimation` are distinct packages under `packages/`.
+**Decision:** Extract `Pose3D`, `Frame`, `Discipline`, `TurnPhaseLabel`, `TurnPhase`, `SessionMetrics` into `packages/core/schemas.py`. The `biomechanics` package re-exports them from `core` for backward compatibility, then drops its own definitions.
 
-**Rationale:** `video-pipeline` has zero ML dependencies (just FFmpeg subprocess calls). Bundling it with `pose-estimation` would force PyTorch installation just to extract frames. This follows the existing pattern where `biomechanics` is pure NumPy.
+**Rationale:** The dependency graph must flow downward: `core` ← `biomechanics`, `core` ← `pose-estimation`, `core` ← `api`, etc. No package should depend on `biomechanics` just to get `Pose3D`. AGENTS.md already lists `core` as "Shared types, configs, utilities."
 
-**Alternative considered:** Single `ml-pipeline` package — rejected because it violates the minimal-deps-per-package convention and makes frame extraction unusable without a GPU stack.
+**Alternative considered:** Keep schemas in biomechanics and have pose-estimation depend on biomechanics — rejected because it creates circular conceptual coupling (pose estimation is upstream of biomechanics in the pipeline, not downstream).
 
-### 2. FFmpeg via subprocess, not ffmpeg-python
+### 2. Three separate packages, not one
+
+**Decision:** `core`, `video-pipeline`, and `pose-estimation` are distinct packages under `packages/`.
+
+**Rationale:** `video-pipeline` has zero Python dependencies (just FFmpeg subprocess calls). `pose-estimation` needs ONNX/torch. `core` needs only numpy + pydantic. Bundling them would force unnecessary dependencies. This follows the existing pattern where `biomechanics` is pure NumPy.
+
+**Alternative considered:** Single `ml-pipeline` package — rejected because it violates the minimal-deps-per-package convention.
+
+### 3. FFmpeg via subprocess, not ffmpeg-python
 
 **Decision:** Call FFmpeg directly via `subprocess.run` with typed wrapper functions rather than using the `ffmpeg-python` binding library.
 
-**Rationale:** `ffmpeg-python` is poorly maintained (last release 2022) and adds an abstraction layer that obscures the actual FFmpeg commands being run. Direct subprocess calls are transparent, debuggable, and have zero additional dependencies. We provide our own thin typed wrappers.
+**Rationale:** `ffmpeg-python` is poorly maintained (last release 2022) and adds an abstraction layer that obscures the actual FFmpeg commands being run. Direct subprocess calls are transparent, debuggable, and have zero additional dependencies.
 
-**Alternative considered:** `ffmpeg-python` — rejected due to maintenance status. `PyAV` — rejected as overkill; we only need basic frame extraction, not per-packet manipulation.
+**Alternative considered:** `ffmpeg-python` — rejected due to maintenance status. `PyAV` — rejected as overkill; we only need basic frame extraction.
 
-### 3. Abstract base classes for model backends
+### 4. Abstract base classes for model backends
 
 **Decision:** Define `PoseEstimator2D` (ABC) and `PoseLifter3D` (ABC) interfaces. Ship with `ViTPoseBackend` and `MotionBERTBackend` as concrete implementations.
 
@@ -57,27 +68,25 @@ class PoseLifter3D(ABC):
     def lift(self, keypoints_2d: list[Keypoints2D]) -> list[Pose3D]: ...
 ```
 
-**Rationale:** PLAN.md explicitly calls for "pluggable model backends" so the community can swap in newer models (RTMPose, Context-Aware PoseFormer, etc.) without modifying downstream code. ABCs enforce the contract at the type level.
+Where `Pose3D` is imported from `core`, not `biomechanics`.
 
-**Alternative considered:** Duck typing with Protocols — workable but ABCs provide clearer error messages for implementors and are more conventional in this codebase.
+**Rationale:** PLAN.md explicitly calls for "pluggable model backends" so the community can swap in newer models (RTMPose, Context-Aware PoseFormer, etc.) without modifying downstream code.
 
-### 4. Model weights via lazy download
+### 5. Model weights via lazy download
 
 **Decision:** Model weights are not bundled. On first use, each backend downloads its checkpoint to `~/.cache/snowclaw/models/` and caches it. A standalone `download_models.py` script pre-fetches all weights.
 
-**Rationale:** Keeps the repo and package size small. The cache directory is user-local and survives reinstalls. Lazy download means users only fetch what they actually use.
+**Rationale:** Keeps the repo and package size small. Lazy download means users only fetch what they actually use.
 
-### 5. ONNX Runtime as default inference engine
+### 6. ONNX Runtime as default inference engine
 
 **Decision:** Ship ViTPose+ and MotionBERT as ONNX models for inference, with a PyTorch fallback.
 
-**Rationale:** ONNX Runtime runs on CPU and GPU without requiring a full PyTorch install, dramatically reducing the default dependency footprint. Users who need PyTorch-specific features (custom layers, training) can opt into the `[torch]` extra.
+**Rationale:** ONNX Runtime runs on CPU and GPU without requiring a full PyTorch install, dramatically reducing the default dependency footprint. Users who need PyTorch-specific features can opt into the `[torch]` extra.
 
-**Alternative considered:** PyTorch-only — rejected because it's a 2GB+ install that blocks CPU-only users. TensorRT — too NVIDIA-specific for an open-source tool.
+### 7. Intermediate data format: Keypoints2D
 
-### 6. Intermediate data format: Keypoints2D
-
-**Decision:** Introduce a lightweight `Keypoints2D` dataclass as the interface between 2D estimation and 3D lifting, separate from `Pose3D`.
+**Decision:** Introduce a lightweight `Keypoints2D` dataclass in `pose-estimation` as the interface between 2D estimation and 3D lifting.
 
 ```python
 @dataclass
@@ -87,16 +96,22 @@ class Keypoints2D:
     image_size: tuple[int, int]  # (height, width)
 ```
 
-**Rationale:** 2D keypoints are in pixel space with variable joint counts depending on the model. `Pose3D` is in meters with a fixed joint set. Forcing 2D results into `Pose3D` would lose information and conflate coordinate systems. The 3D lifter handles the conversion.
+**Rationale:** 2D keypoints are in pixel space with variable joint counts depending on the model. `Pose3D` is in meters with a fixed joint set. The 3D lifter handles the conversion. `Keypoints2D` is internal to `pose-estimation` — not shared via `core` — since no other package needs raw 2D keypoints.
+
+### 8. Pipeline does NOT include biomechanics
+
+**Decision:** The `Pipeline` class chains video → 2D pose → 3D pose and returns `list[core.Pose3D]`. It does not invoke biomechanical analysis.
+
+**Rationale:** The pipeline's job is to produce 3D poses from video. Biomechanical analysis is a separate concern — a consumer composes it: `poses = pipeline.run(video); metrics = biomechanics.compute(poses)`. This keeps the pipeline independent and reusable for non-biomechanics use cases (e.g., 3D viewer rendering, pose export).
 
 ## Risks / Trade-offs
 
-**[Model accuracy on ski clothing]** → Pretrained ViTPose+ and MotionBERT have not been fine-tuned on winter sports. Bulky clothing and helmets may reduce joint detection accuracy. **Mitigation:** Confidence scores are propagated to downstream metrics, allowing low-confidence frames to be flagged or excluded. Fine-tuning is a Phase 3+ concern.
+**[Breaking biomechanics imports]** → Moving schemas from `biomechanics.schemas` to `core.schemas` changes import paths. **Mitigation:** `biomechanics` re-exports all moved types from its `__init__.py` for backward compatibility. Downstream code using `from biomechanics import Pose3D` continues to work.
 
-**[FFmpeg as system dependency]** → Requires FFmpeg installed on the host, which isn't pip-installable. **Mitigation:** Clear error message if `ffmpeg` is not found on PATH; document installation in README. Most ML environments and Docker images already include FFmpeg.
+**[Model accuracy on ski clothing]** → Pretrained ViTPose+ and MotionBERT have not been fine-tuned on winter sports. **Mitigation:** Confidence scores are propagated to allow low-confidence frames to be flagged. Fine-tuning is a later concern.
 
-**[Large model downloads]** → ViTPose+ (~350MB) and MotionBERT (~150MB) must be downloaded. **Mitigation:** Lazy download with progress bar; `download_models.py` for CI/Docker pre-warming; models cached in `~/.cache/snowclaw/`.
+**[FFmpeg as system dependency]** → Requires FFmpeg installed on the host. **Mitigation:** Clear error message if not found; most ML environments already include FFmpeg.
 
-**[ONNX conversion fidelity]** → Some model ops may not convert cleanly to ONNX. **Mitigation:** PyTorch fallback backend. Test numeric equivalence between ONNX and PyTorch outputs in CI.
+**[Large model downloads]** → ViTPose+ (~350MB) and MotionBERT (~150MB). **Mitigation:** Lazy download with progress bar; cache in `~/.cache/snowclaw/`.
 
-**[Single-person assumption]** → Pipeline assumes one skier/snowboarder per video. Multi-person videos will produce incorrect results. **Mitigation:** Document the constraint. Add person detection + selection (largest bounding box) as a lightweight pre-filter in the video pipeline.
+**[Single-person assumption]** → Pipeline assumes one skier/snowboarder per video. **Mitigation:** Document the constraint; add person detection + largest-bbox selection as a lightweight pre-filter.

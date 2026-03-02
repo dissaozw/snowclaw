@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Abstract 3D pose lifter interface
-The system SHALL define a `PoseLifter3D` abstract base class with a `lift` method that accepts a list of `Keypoints2D` and returns a list of `biomechanics.Pose3D` objects.
+The system SHALL define a `PoseLifter3D` abstract base class with a `lift` method that accepts a list of `Keypoints2D` and returns a list of `core.Pose3D` objects.
 
 #### Scenario: Implementing a custom 3D lifter
 - **WHEN** a developer subclasses `PoseLifter3D` and implements `lift`
@@ -12,7 +12,7 @@ The system SHALL provide a `MotionBERTBackend` implementation of `PoseLifter3D` 
 
 #### Scenario: Lift a sequence of 2D keypoints to 3D
 - **WHEN** a list of `Keypoints2D` objects from a video sequence is passed to `MotionBERTBackend.lift()`
-- **THEN** a list of `biomechanics.Pose3D` objects SHALL be returned, one per frame, with joint positions in meters using the Y-up coordinate system
+- **THEN** a list of `core.Pose3D` objects SHALL be returned, one per frame, with joint positions in meters using the Y-up coordinate system
 
 #### Scenario: Temporal consistency
 - **WHEN** a sequence of 2D keypoints is lifted
@@ -23,10 +23,10 @@ The 3D lifter SHALL output joint positions in the project's Y-up, right-hand coo
 
 #### Scenario: Coordinate system compliance
 - **WHEN** `Pose3D` objects are returned from any `PoseLifter3D` backend
-- **THEN** all joint positions SHALL use the Y-up coordinate system defined in `biomechanics.schemas`
+- **THEN** all joint positions SHALL use the Y-up coordinate system defined in `core.schemas`
 
 ### Requirement: Joint mapping to Pose3D
-The system SHALL map model-specific joint indices to the 14 core body joints defined in `biomechanics.Pose3D` (head, neck, left/right shoulder, elbow, wrist, hip, knee, ankle).
+The system SHALL map model-specific joint indices to the 14 core body joints defined in `core.Pose3D` (head, neck, left/right shoulder, elbow, wrist, hip, knee, ankle).
 
 #### Scenario: COCO-to-Pose3D mapping
 - **WHEN** MotionBERT outputs 17 COCO-format 3D joints
