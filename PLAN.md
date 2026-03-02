@@ -340,21 +340,23 @@ Open-source annotation tool (Label Studio or CVAT instance) where community memb
 
 ### Phase 1 — Week 1-2: "Video In, Skeleton Out"
 
-**Goal:** Minimal end-to-end: upload video → see 3D skeleton in browser.
+**Goal:** Two outputs from a single ski/snowboard video: (1) an annotated video with skeleton overlay and metrics, and (2) a simple 3D skeleton viewer with orbit controls.
 
 |Day  |Task                                                                              |Claude Code Role                                                 |
 |-----|----------------------------------------------------------------------------------|-----------------------------------------------------------------|
-|1-2  |Monorepo setup, Docker, CI/CD, FFmpeg preprocessing                               |Scaffold entire repo structure, Dockerfiles, GitHub Actions      |
-|3-4  |Integrate ViTPose+ (2D) + MotionBERT (2D→3D lifting)                              |Write model wrapper classes, download scripts, inference pipeline|
-|5-7  |Three.js viewer: skeleton render, orbit controls, frame scrubber                  |Generate full React Three Fiber component with controls          |
-|8-10 |FastAPI backend: video upload → async ML pipeline → WebSocket status → glTF output|API routes, Celery tasks, data models                            |
-|11-14|Basic metrics (knee angle, inclination, COM height), overlay in viewer            |Metric computation module + viewer overlay panels                |
+|1-2  |Shared `core` package (Pose3D, Frame, enums), FFmpeg video-pipeline               |Scaffold packages, extract schemas from biomechanics             |
+|3-4  |Integrate ViTPose+ (2D) + MotionBERT (2D→3D lifting) with pluggable backends     |Write model wrapper classes, download scripts, inference pipeline|
+|5-7  |Video annotation renderer: draw skeleton, plumb line, metrics on each frame       |OpenCV/Pillow drawing, FFmpeg re-encode to output video          |
+|8-10 |Simple Three.js viewer: skeleton render, orbit controls, frame scrubber           |React Three Fiber component — skeleton only, no mesh/slope       |
+|11-14|FastAPI backend: video upload → async pipeline → annotated video + 3D data output |API routes, Celery tasks, WebSocket status updates               |
 
-**Deliverable:** Working demo — upload ski video, get orbitable 3D skeleton with angle overlays.
+**Deliverables:**
+1. **Annotated video** — skeleton overlay with joint dots, connecting lines, plumb line (COM), and basic metric numbers (knee angle, inclination, COM height). Like SkiPro AI but with transformer-based accuracy (ViTPose+) and temporal smoothing.
+2. **Simple 3D viewer** — orbitable skeleton in the browser with frame scrubbing. Skeleton only — no body mesh, no snow surface, no ski geometry (those are Phase 2).
 
-### Phase 2 — Week 3-4: "Full Mesh + Snowboard"
+### Phase 2 — Week 3-4: "Full Mesh + Snow Scene"
 
-**Goal:** SMPL-X body mesh, equipment detection, snow plane, snowboard support.
+**Goal:** SMPL-X body mesh, equipment detection, snow surface reconstruction, snowboard support. Upgrade the simple skeleton viewer into a full 3D scene.
 
 |Day  |Task                                                                            |Claude Code Role                                   |
 |-----|--------------------------------------------------------------------------------|---------------------------------------------------|
@@ -362,9 +364,9 @@ Open-source annotation tool (Label Studio or CVAT instance) where community memb
 |4-5  |Depth Anything V2 → snow surface plane fitting (RANSAC)                         |Depth pipeline + plane extraction code             |
 |6-7  |SAM 2 equipment segmentation (ski/board/poles), mesh attachment                 |Fine-tune script scaffolding, attachment geometry  |
 |8-10 |Snowboard mode: adapted skeleton mapping, board-specific metrics                |Extend biomechanics module, UI toggle              |
-|11-14|Enhanced viewer: textured mesh, snow plane, measurement tools, screenshot export|Three.js enhancements, UI polish                   |
+|11-14|Enhanced viewer: body mesh, snow slope, ski/board geometry, measurement tools    |Three.js enhancements, UI polish                   |
 
-**Deliverable:** Full 3D mesh of skier OR snowboarder on reconstructed slope.
+**Deliverable:** Full 3D scene — body mesh with detected ski/board geometry on a depth-estimated snow surface. Users can see how their ski edges interact with the snow.
 
 ### Phase 3 — Week 5-6: "AI Coach"
 
