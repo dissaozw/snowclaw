@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import savgol_filter  # type: ignore
 
-from .schemas import TurnPhase, TurnPhaseLabel
+from core.schemas import TurnPhase, TurnPhaseLabel
 
 
 def segment_turns(
