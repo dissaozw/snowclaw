@@ -64,6 +64,38 @@ For best results when recording video for analysis:
 - **Resolution**: 1080p minimum, 4K preferred, 60fps recommended
 - **Duration**: At least 3–5 linked turns per run
 
+## Development Tools
+
+This project includes Claude Code skills for code quality and spec-driven development.
+
+### Code Quality Skills
+
+| Command | Description |
+|---------|-------------|
+| `/test` | Run pytest with failure analysis and suggested fixes |
+| `/lint` | Run ruff linter and formatter with auto-fix |
+| `/review` | Structured code review (correctness, security, testing, style, performance) |
+| `/simplify` | Identify unnecessary complexity and suggest simplifications |
+
+### OpenSpec (Spec-Driven Development)
+
+| Command | Description |
+|---------|-------------|
+| `/opsx:propose` | Create a change proposal with specs, design, and task checklist |
+| `/opsx:apply` | Implement tasks from a spec |
+| `/opsx:archive` | Archive a completed change |
+| `/opsx:explore` | Explore ideas and clarify requirements before committing to a spec |
+
+### Linting
+
+Python linting uses [ruff](https://docs.astral.sh/ruff/), configured in `pyproject.toml`:
+
+```bash
+pip install -e ".[dev]"
+ruff check packages/
+ruff format packages/
+```
+
 ## Contributing
 
 Contributions are welcome across many areas:
