@@ -24,6 +24,7 @@ Shared data structures (`Pose3D`, `Frame`, etc.) currently live inside `biomecha
 - `video-annotation`: Render skeleton overlay + metrics onto video frames, encode output video
 - `viewer-3d-skeleton`: Simple Three.js/R3F skeleton viewer with orbit controls and frame scrubbing
 - `api-backend`: FastAPI video upload, async pipeline, WebSocket status, serve results
+- `gpu-deployment`: Dockerfile with CUDA, docker-compose, GPU cloud deployment support
 
 ### Modified Capabilities
 - `biomechanics`: Refactor to import schemas from `core` (no behavioral changes)
@@ -34,4 +35,4 @@ Shared data structures (`Pose3D`, `Frame`, etc.) currently live inside `biomecha
 - **Modified packages**: `packages/biomechanics/` — schemas move to `core`
 - **New frontend code**: `packages/viewer-3d/` (React Three Fiber, TypeScript)
 - **Dependencies**: `core` → numpy + pydantic. `video-pipeline` → zero (FFmpeg subprocess). `pose-estimation` → core + onnxruntime. `video-annotation` → core + opencv-python. `api` → FastAPI + Celery + Redis.
-- **Infrastructure**: Requires FFmpeg on host, Redis for job queue, ML model weights downloaded on first use
+- **Infrastructure**: Docker with NVIDIA Container Toolkit for GPU inference, Redis for job queue, ML model weights pre-warmed in Docker image. Deployable to any GPU cloud (AWS, GCP, Lambda Labs, RunPod).

@@ -80,9 +80,20 @@
 - [ ] 9.7 Implement result cleanup (delete after configurable retention period)
 - [ ] 9.8 Write API tests (upload, status, results, error cases)
 
-## 10. Integration & End-to-End
+## 10. Docker & GPU Deployment
 
-- [ ] 10.1 Integration test: mock backends → annotated video is produced
-- [ ] 10.2 Integration test: mock backends → 3D viewer receives valid pose JSON
-- [ ] 10.3 Run full test suite (`pytest -v`) — all packages pass
-- [ ] 10.4 Manual end-to-end: upload real ski video → annotated video + working 3D viewer
+- [ ] 10.1 Create `Dockerfile` based on NVIDIA CUDA base image with Python, FFmpeg, ONNX Runtime GPU
+- [ ] 10.2 Add model weight download step to Docker build (pre-warm ViTPose+ and MotionBERT in image)
+- [ ] 10.3 Create `Dockerfile.frontend` for the 3D viewer (Node.js + Vite build)
+- [ ] 10.4 Create `docker-compose.yml` — API server, Celery worker (GPU), Redis, frontend. Single `docker compose up`
+- [ ] 10.5 Configure NVIDIA Container Toolkit GPU passthrough in compose
+- [ ] 10.6 Add CPU fallback: detect GPU availability, warn if falling back to CPU
+- [ ] 10.7 Write GPU cloud deployment guide (AWS, GCP, RunPod, Lambda Labs)
+
+## 11. Integration & End-to-End
+
+- [ ] 11.1 Integration test: mock backends → annotated video is produced
+- [ ] 11.2 Integration test: mock backends → 3D viewer receives valid pose JSON
+- [ ] 11.3 Run full test suite (`pytest -v`) — all packages pass
+- [ ] 11.4 Docker build + `docker compose up` → full stack starts with GPU
+- [ ] 11.5 Manual end-to-end: upload real ski video → annotated video + working 3D viewer

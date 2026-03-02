@@ -348,11 +348,13 @@ Open-source annotation tool (Label Studio or CVAT instance) where community memb
 |3-4  |Integrate ViTPose+ (2D) + MotionBERT (2D→3D lifting) with pluggable backends     |Write model wrapper classes, download scripts, inference pipeline|
 |5-7  |Video annotation renderer: draw skeleton, plumb line, metrics on each frame       |OpenCV/Pillow drawing, FFmpeg re-encode to output video          |
 |8-10 |Simple Three.js viewer: skeleton render, orbit controls, frame scrubber           |React Three Fiber component — skeleton only, no mesh/slope       |
-|11-14|FastAPI backend: video upload → async pipeline → annotated video + 3D data output |API routes, Celery tasks, WebSocket status updates               |
+|11-12|FastAPI backend: video upload → async pipeline → annotated video + 3D data output |API routes, Celery tasks, WebSocket status updates               |
+|13-14|Docker + GPU deployment: Dockerfile with CUDA, docker-compose, GPU cluster guide  |Dockerfiles, NVIDIA Container Toolkit setup, compose config      |
 
 **Deliverables:**
 1. **Annotated video** — skeleton overlay with joint dots, connecting lines, plumb line (COM), and basic metric numbers (knee angle, inclination, COM height). Like SkiPro AI but with transformer-based accuracy (ViTPose+) and temporal smoothing.
 2. **Simple 3D viewer** — orbitable skeleton in the browser with frame scrubbing. Skeleton only — no body mesh, no snow surface, no ski geometry (those are Phase 2).
+3. **GPU-ready deployment** — Dockerfile with CUDA support, docker-compose for one-command startup, pre-warmed model weights. Deployable to any GPU cloud (AWS, GCP, Lambda Labs, RunPod) with minimal setup.
 
 ### Phase 2 — Week 3-4: "Full Mesh + Snow Scene"
 
