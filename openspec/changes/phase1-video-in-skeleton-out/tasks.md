@@ -83,10 +83,11 @@
 
 ## 10. CLI Tool & Sample Data
 
-- [x] 10.1 Implement `python -m snowclaw.cli process <video> --output-dir <dir>` — runs full pipeline without web stack
+- [x] 10.1 Implement `PYTHONPATH=packages python -m snowclaw.cli process <video> --output-dir <dir>` — runs full pipeline without web stack
 - [x] 10.2 CLI outputs: `annotated.mp4` + `poses.json` (per-frame Pose3D array with timestamps)
 - [x] 10.3 Add a sample ski video (5-10s, public domain) to `data/samples/` for testing
 - [x] 10.4 Write CLI tests (valid video, invalid path, output directory creation)
+- [x] 10.5 Namespace fix: moved CLI package from `packages/cli/` to `packages/snowclaw/`; canonical invocation is `PYTHONPATH=packages python -m snowclaw.cli process <video> --output-dir <dir>`
 
 ## 11. Docker & GPU Deployment
 
@@ -103,7 +104,7 @@
 - [x] 12.1 Integration test: mock backends → annotated video is produced
 - [x] 12.2 Integration test: mock backends → 3D viewer receives valid pose JSON
 - [x] 12.3 Run full test suite (`pytest -v`) — all packages pass
-- [ ] 12.4 CLI test: `python -m snowclaw.cli process data/samples/ski_demo.mp4 --output-dir ./results/` → verify annotated.mp4 and poses.json
+- [x] 12.4 CLI test: `PYTHONPATH=packages python -m snowclaw.cli process data/samples/ski_demo.mp4 --output-dir ./results/` → verify annotated.mp4 and poses.json
 - [ ] 12.5 Viewer test: `npm run dev -- --data ./results/poses.json` → verify skeleton renders, orbit works, scrubber works
 - [ ] 12.6 Docker test: `docker compose up` → full stack starts, upload via browser works
 - [ ] 12.7 Full end-to-end: upload sample video via web UI → watch annotated video → orbit 3D skeleton

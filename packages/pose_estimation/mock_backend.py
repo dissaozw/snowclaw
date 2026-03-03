@@ -6,10 +6,10 @@ Produces deterministic, anatomically-plausible synthetic keypoints — good
 enough to exercise the full pipeline (video annotation, 3D viewer, CLI).
 
 Enable via CLI flag:
-    python -m cli process video.mp4 --mock
+    PYTHONPATH=packages python -m snowclaw.cli process video.mp4 --mock
 
 Or environment variable:
-    SNOWCLAW_MOCK_MODELS=1 python -m cli process video.mp4
+    SNOWCLAW_MOCK_MODELS=1 PYTHONPATH=packages python -m snowclaw.cli process video.mp4
 """
 
 from __future__ import annotations
