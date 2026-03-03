@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
+
+
+def _mock_env() -> bool:
+    """Return True if SNOWCLAW_MOCK_MODELS env var requests mock backends."""
+    return os.environ.get("SNOWCLAW_MOCK_MODELS", "").strip() in ("1", "true", "yes")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,6 +57,16 @@ def main(argv: list[str] | None = None) -> int:
         default="auto",
         choices=["auto", "cpu", "cuda"],
         help="Inference device (default: auto)",
+    )
+    process_parser.add_argument(
+        "--mock",
+        action="store_true",
+        default=False,
+        help=(
+            "Use mock pose estimation backends (no model download required). "
+            "Useful for CI, testing, and pipeline validation. "
+            "Also enabled by SNOWCLAW_MOCK_MODELS=1 env var."
+        ),
     )
 
     args = parser.parse_args(argv)
@@ -102,18 +118,30 @@ def _process_video(args: argparse.Namespace) -> int:
     print(f"  Extracted {len(frames)} frames")
 
     # Step 3: 2D pose estimation
-    print("[3/5] Detecting 2D keypoints (ViTPose+)...")
-    from pose_estimation.vitpose_backend import ViTPoseBackend
+    use_mock = getattr(args, "mock", False) or _mock_env()
 
-    estimator = ViTPoseBackend(device=args.device)
+    if use_mock:
+        print("[3/5] Detecting 2D keypoints (mock — no model download)...")
+        from pose_estimation.mock_backend import MockViTPoseBackend
+        estimator = MockViTPoseBackend()
+    else:
+        print("[3/5] Detecting 2D keypoints (ViTPose+)...")
+        from pose_estimation.vitpose_backend import ViTPoseBackend
+        estimator = ViTPoseBackend(device=args.device)
+
     keypoints_2d = estimator.predict(frames)
     print(f"  Detected keypoints in {len(keypoints_2d)} frames")
 
     # Step 4: 3D pose lifting
-    print("[4/5] Lifting to 3D (MotionBERT)...")
-    from pose_estimation.motionbert_backend import MotionBERTBackend
+    if use_mock:
+        print("[4/5] Lifting to 3D (mock — no model download)...")
+        from pose_estimation.mock_backend import MockMotionBERTBackend
+        lifter = MockMotionBERTBackend()
+    else:
+        print("[4/5] Lifting to 3D (MotionBERT)...")
+        from pose_estimation.motionbert_backend import MotionBERTBackend
+        lifter = MotionBERTBackend(device=args.device)
 
-    lifter = MotionBERTBackend(device=args.device)
     poses_3d = lifter.lift(keypoints_2d)
     print(f"  Lifted {len(poses_3d)} frames to 3D")
 
