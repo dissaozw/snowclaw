@@ -1,4 +1,4 @@
-"""MotionBERT 3D pose lifting backend using ONNX Runtime."""
+"""MotionBERT 3D pose lifting backend using PyTorch."""
 
 from __future__ import annotations
 
@@ -15,9 +15,26 @@ from .joint_mapping import coco_keypoints_to_pose3d
 
 logger = logging.getLogger(__name__)
 
-# MotionBERT config
+# MotionBERT config (lite model)
 MOTIONBERT_WINDOW_SIZE = 243  # Temporal window (frames)
 MOTIONBERT_NUM_JOINTS = 17
+
+# DSTformer lite config (from MB_ft_h36m_global_lite.yaml)
+LITE_CONFIG = dict(
+    dim_in=3,
+    dim_out=3,
+    dim_feat=256,
+    dim_rep=512,
+    depth=5,
+    num_heads=8,
+    mlp_ratio=4,
+    num_joints=17,
+    maxlen=243,
+    att_fuse=True,
+)
+
+HF_REPO_ID = "walterzhu/MotionBERT"
+HF_CHECKPOINT = "checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin"
 
 
 def _normalize_keypoints_2d(
@@ -103,9 +120,20 @@ def _apply_temporal_smoothing(
     return smoothed
 
 
+def _get_device() -> str:
+    """Select best available PyTorch device."""
+    import torch
+
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 class MotionBERTBackend(PoseLifter3D):
     """
-    MotionBERT 3D pose lifting using ONNX Runtime.
+    MotionBERT 3D pose lifting using PyTorch.
 
     Takes 2D keypoints and produces 3D poses in the Y-up coordinate system.
     Includes temporal smoothing for stable skeleton output.
@@ -120,38 +148,69 @@ class MotionBERTBackend(PoseLifter3D):
     ):
         """
         Args:
-            model_path: Path to MotionBERT ONNX model. Downloads if None.
-            device: "auto", "cuda", or "cpu".
+            model_path: Path to MotionBERT checkpoint (.bin). Downloads if None.
+            device: "auto" (detect MPS/CUDA), "cuda", "mps", or "cpu".
             smoothing_window: Savitzky-Golay window length for temporal smoothing.
             smoothing_poly: SG polynomial order.
         """
         self._model_path = model_path
-        self._session = None
+        self._model = None
+        self._device_pref = device
+        self._device = None
         self._smoothing_window = smoothing_window
         self._smoothing_poly = smoothing_poly
 
-        from .vitpose_backend import _get_onnx_providers
-        self._providers = _get_onnx_providers(device)
+    def _load_model(self):
+        """Lazy-load the DSTformer model with checkpoint weights."""
+        if self._model is not None:
+            return self._model
 
-    def _get_session(self):
-        """Lazy-load ONNX session."""
-        if self._session is not None:
-            return self._session
+        import torch
 
-        import onnxruntime as ort
+        from .motionbert import DSTformer
 
+        # Resolve device
+        if self._device_pref == "auto":
+            self._device = _get_device()
+        else:
+            self._device = self._device_pref
+        logger.info("MotionBERT using device: %s", self._device)
+
+        # Download checkpoint if needed
         if self._model_path is None:
-            from .model_cache import download_model
-            self._model_path = download_model(
-                url="https://huggingface.co/snowclaw/motionbert/resolve/main/motionbert_lite.onnx",
-                filename="motionbert_lite.onnx",
+            from huggingface_hub import hf_hub_download
+            self._model_path = hf_hub_download(
+                repo_id=HF_REPO_ID,
+                filename=HF_CHECKPOINT,
             )
 
-        self._session = ort.InferenceSession(
+        # Build model
+        model = DSTformer(**LITE_CONFIG)
+
+        # Load checkpoint (weights_only=False needed for legacy PyTorch saves)
+        checkpoint = torch.load(
             str(self._model_path),
-            providers=self._providers,
+            map_location="cpu",
+            weights_only=False,
         )
-        return self._session
+        # The checkpoint may have 'model', 'model_pos', or be a raw state_dict
+        if "model_pos" in checkpoint:
+            state_dict = checkpoint["model_pos"]
+        elif "model" in checkpoint:
+            state_dict = checkpoint["model"]
+        else:
+            state_dict = checkpoint
+
+        # Strip 'module.' prefix from DataParallel-wrapped checkpoints
+        state_dict = {
+            k.removeprefix("module."): v for k, v in state_dict.items()
+        }
+
+        model.load_state_dict(state_dict, strict=True)
+        model.to(self._device)
+        model.eval()
+        self._model = model
+        return self._model
 
     def lift(self, keypoints_2d: list[Keypoints2D]) -> list[Pose3D]:
         """
@@ -166,8 +225,9 @@ class MotionBERTBackend(PoseLifter3D):
         if not keypoints_2d:
             return []
 
-        session = self._get_session()
-        input_name = session.get_inputs()[0].name
+        import torch
+
+        model = self._load_model()
 
         # Normalize all 2D keypoints
         normalized = [_normalize_keypoints_2d(kp) for kp in keypoints_2d]
@@ -176,18 +236,23 @@ class MotionBERTBackend(PoseLifter3D):
         # Run inference frame-by-frame with temporal windows
         all_joints_3d = np.zeros((n_frames, MOTIONBERT_NUM_JOINTS, 3), dtype=np.float32)
 
-        for i in range(n_frames):
-            window = _assemble_temporal_window(
-                normalized, MOTIONBERT_WINDOW_SIZE, i
-            )
-            # Shape: (1, window_size, 17, 2)
-            input_data = window[np.newaxis].astype(np.float32)
-            outputs = session.run(None, {input_name: input_data})
+        with torch.no_grad():
+            for i in range(n_frames):
+                window = _assemble_temporal_window(
+                    normalized, MOTIONBERT_WINDOW_SIZE, i
+                )
+                # MotionBERT expects (B, T, J, C) where C includes confidence
+                # Append a dummy confidence channel of 1.0
+                conf = np.ones((*window.shape[:-1], 1), dtype=np.float32)
+                window_3ch = np.concatenate([window, conf], axis=-1)  # (243, 17, 3)
 
-            # Output shape: (1, window_size, 17, 3)
-            # Take the center frame prediction
-            center = MOTIONBERT_WINDOW_SIZE // 2
-            all_joints_3d[i] = outputs[0][0, center]
+                # Shape: (1, 243, 17, 3)
+                input_tensor = torch.from_numpy(window_3ch[np.newaxis]).float().to(self._device)
+                output = model(input_tensor)  # (1, 243, 17, 3)
+
+                # Take the center frame prediction
+                center = MOTIONBERT_WINDOW_SIZE // 2
+                all_joints_3d[i] = output[0, center].cpu().numpy()
 
         # Apply temporal smoothing
         all_joints_3d = _apply_temporal_smoothing(

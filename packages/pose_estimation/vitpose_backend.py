@@ -136,8 +136,8 @@ class ViTPoseBackend(PoseEstimator2D):
         if self._model_path is None:
             from .model_cache import download_model
             self._model_path = download_model(
-                url="https://huggingface.co/snowclaw/vitpose-plus/resolve/main/vitpose_plus_base.onnx",
-                filename="vitpose_plus_base.onnx",
+                url="https://huggingface.co/onnx-community/vitpose-base-simple/resolve/main/onnx/model_int8.onnx",
+                filename="vitpose_base_simple_int8.onnx",
             )
 
         self._session = ort.InferenceSession(
