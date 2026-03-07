@@ -10,11 +10,15 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    "easy-vitpose",
+    "ffmpeg-python>=0.2.0",
+    "filterpy>=1.4.5",
     "huggingface-hub>=1.6.0",
     "numpy>=1.26",
     "onnxruntime>=1.24.3",
     "opencv-python-headless>=4.13.0.92",
     "pydantic>=2.0",
+    "scikit-image>=0.26.0",
     "scipy>=1.11",
     "torch>=2.10.0",
     "ultralytics>=8.4.21",
@@ -52,3 +56,6 @@ known-first-party = ["biomechanics", "core", "video_pipeline", "pose_estimation"
 
 [tool.hatch.build.targets.wheel]
 packages = ["packages"]
+
+[tool.uv.sources]
+easy-vitpose = { git = "https://github.com/JunkyByte/easy_ViTPose.git" }
