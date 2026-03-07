@@ -52,6 +52,9 @@ class SubjectTracker:
             raise ValueError(f"min_confident_joints must be >= 1, got {min_confident_joints}")
         if max_drift_px < 0:
             raise ValueError(f"max_drift_px must be >= 0, got {max_drift_px}")
+        # Note: max_drift_px=0.0 is valid but effectively disables temporal tracking —
+        # floating-point centroid jitter from mean() will almost always exceed 0, so
+        # _nearest always falls back to largest-bbox. Use a small positive value instead.
         self.min_confident_joints = min_confident_joints
         self.min_confidence = min_confidence
         self.max_drift_px = max_drift_px
@@ -164,12 +167,18 @@ def _centroid(kp: np.ndarray, min_conf: float = 0.3) -> np.ndarray:
     finite_mask = np.isfinite(coords).all(axis=1)
     conf_mask = (conf >= min_conf) & finite_mask
     if not np.any(conf_mask):
-        # Fall back to any finite joint
+        # No confident+finite joints — fall back to any finite joint so we
+        # can still compute a centroid for distance comparison. This matches
+        # _bbox_area's behaviour of using whatever finite coords are available
+        # rather than returning a sentinel value that would poison comparisons.
         conf_mask = finite_mask
     if not np.any(conf_mask):
-        # All joints are NaN/Inf — return zeros as last resort
+        # All joints are NaN/Inf — return zeros as a safe sentinel.
+        # _bbox_area also returns 0.0 in this case (consistent behaviour).
         return np.zeros(2, dtype=float)
-    # easy_ViTPose stores (y, x) — swap to (x, y) for consistent pixel coords
+    # easy_ViTPose stores (y, x) — swap to (x, y) for consistent pixel coords.
+    # This is the SubjectTracker-internal swap; the public output swap is in
+    # vitpose_backend._yx_to_xy().
     xy = coords[conf_mask][:, ::-1]
     return xy.mean(axis=0)
 

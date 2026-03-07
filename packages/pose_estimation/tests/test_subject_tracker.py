@@ -18,9 +18,18 @@ def _make_kp(
     spread: float = 50.0,
     conf: float = 0.9,
     n: int = 17,
+    seed: int | None = None,
 ) -> np.ndarray:
-    """Build fake (n, 3) keypoints in easy_ViTPose (y, x, conf) order."""
-    rng = np.random.default_rng(0)
+    """Build fake (n, 3) keypoints in easy_ViTPose (y, x, conf) order.
+
+    Args:
+        seed: RNG seed. Defaults to a hash of (cy, cx, spread) so that two
+              calls with different centroids always produce different jitter
+              patterns, avoiding the masked-bug risk of a fixed global seed.
+    """
+    if seed is None:
+        seed = hash((cy, cx, spread)) & 0xFFFFFFFF
+    rng = np.random.default_rng(seed)
     kp = np.zeros((n, 3), dtype=np.float32)
     kp[:, 0] = cy + rng.uniform(-spread, spread, n)  # y
     kp[:, 1] = cx + rng.uniform(-spread, spread, n)  # x
