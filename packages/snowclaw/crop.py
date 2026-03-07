@@ -4,30 +4,38 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
 
 
 def _smooth(arr: np.ndarray, window: int = 31) -> np.ndarray:
-    """Apply moving-average smoothing, clamping window to arr length."""
+    """Apply moving-average smoothing with edge-replicate padding.
+
+    Uses edge-replicate padding (not zero-padding) so the trajectory does not
+    drift toward the origin in the first/last ``window // 2`` frames.
+    """
     w = min(window, len(arr))
     if w % 2 == 0:
         w -= 1
     if w < 3:
         return arr.copy()
     kernel = np.ones(w) / w
-    return np.convolve(arr, kernel, mode="same")
+    pad = w // 2
+    padded = np.pad(arr, pad, mode="edge")
+    return np.convolve(padded, kernel, mode="valid")
 
 
-def _track_persons(video_path: Path, track_id: int | None) -> dict[int, list[tuple]]:
+def _track_persons(
+    video_path: Path,
+    track_id: int | None,
+) -> tuple[dict[int, list[tuple]], int]:
     """
     Run YOLO ByteTrack on the video and return per-frame bboxes keyed by track ID.
 
     Returns:
-        tracks: {track_id: [(frame_idx, x1, y1, x2, y2), ...]}
-        chosen_id: the track ID selected (largest cumulative bbox area)
+        tracks:   {track_id: [(frame_idx, x1, y1, x2, y2), ...]}
+        n_frames: total number of frames processed by the tracker
     """
     try:
         from ultralytics import YOLO
@@ -128,53 +136,6 @@ def _build_crop_trajectory(
     crop_h = max(crop_h, 64)
 
     return cx_arr, cy_arr, crop_w, crop_h
-
-
-def _render_crop(
-    video_path: Path,
-    cx_arr: np.ndarray,
-    cy_arr: np.ndarray,
-    crop_w: int,
-    crop_h: int,
-    video_w: int,
-    video_h: int,
-    output_path: Path,
-    out_w: int = 848,
-    out_h: int = 476,
-) -> None:
-    """Use ffmpeg sendcmd to apply per-frame dynamic crop following the person."""
-
-    # Build a sendcmd script that sets crop x/y every frame
-    # sendcmd format: <time_s> crop x <val>; <time_s> crop y <val>
-    import cv2
-
-    cap = cv2.VideoCapture(str(video_path))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
-
-    lines = []
-    for i, (cx, cy) in enumerate(zip(cx_arr, cy_arr)):
-        x = int(np.clip(cx - crop_w / 2, 0, video_w - crop_w))
-        y = int(np.clip(cy - crop_h / 2, 0, video_h - crop_h))
-        t = i / fps
-        lines.append(f"{t:.6f} [enter] crop x {x};")
-        lines.append(f"{t:.6f} [enter] crop y {y};")
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        f.write("\n".join(lines))
-        cmd_file = f.name
-
-    vf = (
-        f"crop={crop_w}:{crop_h}:0:0,"
-        f"sendcmd=filename={cmd_file},"
-        f"crop=keep_aspect=1,"   # keeps the crop params from sendcmd
-        f"scale={out_w}:{out_h}:flags=lanczos"
-    )
-
-    # sendcmd + crop chaining is tricky; use simpler approach: write frames via OpenCV
-    Path(cmd_file).unlink(missing_ok=True)
-    _render_crop_opencv(video_path, cx_arr, cy_arr, crop_w, crop_h,
-                        video_w, video_h, output_path, out_w, out_h, fps)
 
 
 def _render_crop_opencv(

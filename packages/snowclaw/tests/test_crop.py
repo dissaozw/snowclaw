@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -37,7 +34,15 @@ class TestSmooth:
     def test_constant_array_stays_constant(self):
         arr = np.full(50, 5.0)
         out = _smooth(arr, window=9)
-        np.testing.assert_allclose(out[4:-4], 5.0, atol=1e-6)
+        np.testing.assert_allclose(out, 5.0, atol=1e-6)
+
+    def test_no_edge_drift(self):
+        """Edge values should not drift toward zero (regression for zero-pad bug)."""
+        arr = np.full(60, 400.0)   # simulates a crop centre held at x=400
+        out = _smooth(arr, window=31)
+        # All values — including the first and last 15 frames — must stay near 400
+        assert out[0] > 390, f"First frame drifted to {out[0]:.1f} (zero-pad edge bug)"
+        assert out[-1] > 390, f"Last frame drifted to {out[-1]:.1f} (zero-pad edge bug)"
 
 
 class TestSelectTrack:
@@ -124,35 +129,49 @@ class TestBuildCropTrajectory:
 
 
 @pytest.mark.integration
-def test_crop_cli_mock(tmp_path):
-    """Crop subcommand runs end-to-end with a mocked YOLO tracker."""
+def test_crop_end_to_end_mock(tmp_path):
+    """Crop pipeline runs end-to-end with a mocked YOLO tracker."""
     sample = Path(__file__).parents[3] / "data" / "samples" / "ski_demo.mp4"
     if not sample.exists():
         pytest.skip("sample video not present")
 
     output = tmp_path / "out_crop.mp4"
 
-    # Patch YOLO so we don't need real weights in CI
+    # Build fake YOLO results — one person, fixed bbox, 30 frames
     fake_box = MagicMock()
-    fake_box.xyxy.cpu().numpy.return_value = np.array([[100, 80, 200, 280]])
+    fake_box.xyxy.cpu().numpy.return_value = np.array([[100.0, 80.0, 300.0, 380.0]])
     fake_box.id.cpu().numpy.return_value = np.array([1])
 
     fake_result = MagicMock()
     fake_result.boxes = fake_box
 
-    with patch("ultralytics.YOLO") as MockYOLO:
+    # Patch YOLO in the crop module (not in ultralytics directly, so it works
+    # in-process without crossing subprocess boundaries)
+    with patch("snowclaw.crop.YOLO", create=True) as MockYOLO:
         instance = MockYOLO.return_value
         instance.track.return_value = iter([fake_result] * 30)
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "snowclaw.cli",
-                "crop", str(sample),
-                "--output", str(output),
-            ],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "PYTHONPATH": str(Path(__file__).parents[3] / "packages")},
+        from snowclaw.crop import _track_persons, _select_track, _build_crop_trajectory, _render_crop_opencv
+        import argparse, cv2
+
+        # Build minimal args namespace
+        args = argparse.Namespace(
+            video=str(sample),
+            output=str(output),
+            track_id=None,
+            padding=0.4,
+            smooth=15,
+            out_width=848,
+            out_height=476,
         )
 
-    assert result.returncode == 0 or "Done" in result.stdout, result.stderr
+        with patch("snowclaw.crop._track_persons") as mock_track:
+            mock_track.return_value = (
+                {1: [(i, 100.0, 80.0, 300.0, 380.0) for i in range(30)]},
+                30,
+            )
+            from snowclaw.crop import run_crop
+            rc = run_crop(args)
+
+    assert rc == 0
+    assert output.exists()
