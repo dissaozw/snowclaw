@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from core.schemas import Pose3D
+from pose_estimation.interfaces import Keypoints2D
 from video_pipeline.exceptions import DependencyError, VideoProcessingError
 
 from .skeleton import draw_com_plumb_line, draw_metrics_text, draw_skeleton
@@ -17,28 +18,34 @@ from .skeleton import draw_com_plumb_line, draw_metrics_text, draw_skeleton
 
 def annotate_frames(
     frames: list[np.ndarray],
+    keypoints_2d: list[Keypoints2D],
     poses: list[Pose3D],
 ) -> list[np.ndarray]:
     """
     Draw skeleton overlay, COM plumb line, and metrics on each frame.
 
+    Uses original 2D keypoints for skeleton drawing (pixel-accurate alignment)
+    and 3D poses for biomechanical metrics computation.
+
     Args:
         frames: List of BGR images (H, W, 3), uint8.
+        keypoints_2d: List of 2D keypoint detections, one per frame.
         poses: List of Pose3D, one per frame. Must match len(frames).
 
     Returns:
         List of annotated frames (copies, originals not modified).
     """
-    if len(frames) != len(poses):
+    if len(frames) != len(poses) or len(frames) != len(keypoints_2d):
         raise ValueError(
-            f"frames ({len(frames)}) and poses ({len(poses)}) must have the same length"
+            f"frames ({len(frames)}), keypoints_2d ({len(keypoints_2d)}), "
+            f"and poses ({len(poses)}) must have the same length"
         )
 
     annotated = []
-    for frame, pose in zip(frames, poses):
+    for frame, kp, pose in zip(frames, keypoints_2d, poses):
         out = frame.copy()
-        draw_skeleton(out, pose)
-        draw_com_plumb_line(out, pose)
+        draw_skeleton(out, kp)
+        draw_com_plumb_line(out, kp, pose)
         draw_metrics_text(out, pose)
         annotated.append(out)
 
@@ -47,6 +54,7 @@ def annotate_frames(
 
 def annotate_video(
     input_path: str | Path,
+    keypoints_2d: list[Keypoints2D],
     poses: list[Pose3D],
     output_path: str | Path,
     fps: float | None = None,
@@ -54,10 +62,12 @@ def annotate_video(
     """
     Annotate a full video file: draw skeleton overlay on each frame, encode output.
 
-    Preserves original audio track.
+    Preserves original audio track. Uses original 2D keypoints for skeleton
+    drawing (pixel-accurate) and 3D poses for biomechanical metrics.
 
     Args:
         input_path: Path to the original video.
+        keypoints_2d: List of 2D keypoint detections, one per frame.
         poses: List of Pose3D, one per frame.
         output_path: Path for the output annotated video.
         fps: FPS for the output video. If None, uses source FPS.
@@ -83,15 +93,15 @@ def annotate_video(
     from video_pipeline.frames import extract_frames
     frames_rgb = extract_frames(input_path)
 
-    # Match poses to frames (use min of both lengths)
-    n = min(len(frames_rgb), len(poses))
+    # Match poses to frames (use min of all lengths)
+    n = min(len(frames_rgb), len(keypoints_2d), len(poses))
 
     # Convert RGB to BGR for OpenCV annotation
     annotated_bgr = []
     for i in range(n):
         bgr = cv2.cvtColor(frames_rgb[i], cv2.COLOR_RGB2BGR)
-        draw_skeleton(bgr, poses[i])
-        draw_com_plumb_line(bgr, poses[i])
+        draw_skeleton(bgr, keypoints_2d[i])
+        draw_com_plumb_line(bgr, keypoints_2d[i], poses[i])
         draw_metrics_text(bgr, poses[i])
         annotated_bgr.append(bgr)
 

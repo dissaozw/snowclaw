@@ -151,7 +151,7 @@ def _process_video(args: argparse.Namespace) -> int:
     from video_annotation.skeleton import format_metrics
 
     output_video = output_dir / "annotated.mp4"
-    annotate_video(video_path, poses_3d, output_video, fps=args.fps or meta.fps)
+    annotate_video(video_path, keypoints_2d, poses_3d, output_video, fps=args.fps or meta.fps)
 
     # Save poses as JSON
     effective_fps = args.fps or meta.fps

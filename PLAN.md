@@ -544,7 +544,7 @@ docker compose up -d
 python scripts/download_models.py
 
 # Run the pipeline on a sample video
-python -m packages.api.cli analyze --video samples/ski_demo.mp4
+PYTHONPATH=packages python -m snowclaw.cli process data/samples/ski_demo.mp4 --output-dir ./results/
 
 # Start the web viewer
 cd packages/web && npm install && npm run dev

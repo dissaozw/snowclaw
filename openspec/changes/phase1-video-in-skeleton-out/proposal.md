@@ -8,7 +8,7 @@ Shared data structures (`Pose3D`, `Frame`, etc.) currently live inside `biomecha
 
 - **New `core` package** — Extract shared data structures (`Pose3D`, `Frame`, `Discipline`, `TurnPhaseLabel`, `SessionMetrics`, `TurnPhase`) from `biomechanics` into `packages/core/`. All packages import from here.
 - **Refactor `biomechanics`** — Import schemas from `core`, re-export for backward compatibility.
-- **CLI tool** — `python -m snowclaw.cli process video.mp4 --output-dir ./results/` produces annotated video + poses JSON without needing the web stack. Fastest way to test and verify outputs.
+- **CLI tool** — `PYTHONPATH=packages python -m snowclaw.cli process video.mp4 --output-dir ./results/` produces annotated video + poses JSON without needing the web stack. Fastest way to test and verify outputs.
 - **New `video-pipeline` package** — FFmpeg-based video preprocessing: frame extraction, resolution normalization, metadata extraction. No ML dependencies.
 - **New `pose-estimation` package** — Pluggable backends: ViTPose+ (2D) and MotionBERT (3D lifting). Outputs `core.Pose3D`. Does not depend on `biomechanics`.
 - **New video annotation renderer** — Draws skeleton overlay (joint dots, connecting lines, COM plumb line, metric numbers) onto video frames and encodes an output video. Uses OpenCV/Pillow for drawing, FFmpeg for encoding.

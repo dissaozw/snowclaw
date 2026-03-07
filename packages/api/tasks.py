@@ -124,7 +124,7 @@ def process_video(self, job_id: str, input_path: str) -> dict:
         from video_annotation import annotate_video
 
         annotated_path = results_dir / "annotated.mp4"
-        annotate_video(input_path, poses_3d, annotated_path)
+        annotate_video(input_path, keypoints_2d, poses_3d, annotated_path)
         _update_progress(job_id, PipelineStage.ANNOTATING_VIDEO, 100)
         logger.info("Job %s: annotated video saved", job_id)
 

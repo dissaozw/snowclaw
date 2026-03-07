@@ -6,9 +6,37 @@ import cv2
 import numpy as np
 
 from core.schemas import Pose3D
+from pose_estimation.interfaces import Keypoints2D
 
-# Bone connections (pairs of joint names)
-BONES = [
+# COCO keypoint indices (17 joints):
+# 0: nose, 1: left_eye, 2: right_eye, 3: left_ear, 4: right_ear,
+# 5: left_shoulder, 6: right_shoulder, 7: left_elbow, 8: right_elbow,
+# 9: left_wrist, 10: right_wrist, 11: left_hip, 12: right_hip,
+# 13: left_knee, 14: right_knee, 15: left_ankle, 16: right_ankle
+
+# Bone connections using COCO indices (skip face joints for clean skeleton)
+COCO_BONES = [
+    (0, 5),    # nose → left_shoulder (approximate head-neck)
+    (0, 6),    # nose → right_shoulder
+    (5, 6),    # left_shoulder → right_shoulder
+    (5, 7),    # left_shoulder → left_elbow
+    (7, 9),    # left_elbow → left_wrist
+    (6, 8),    # right_shoulder → right_elbow
+    (8, 10),   # right_elbow → right_wrist
+    (5, 11),   # left_shoulder → left_hip
+    (6, 12),   # right_shoulder → right_hip
+    (11, 12),  # left_hip → right_hip
+    (11, 13),  # left_hip → left_knee
+    (13, 15),  # left_knee → left_ankle
+    (12, 14),  # right_hip → right_knee
+    (14, 16),  # right_knee → right_ankle
+]
+
+# COCO joint indices to draw (skip eyes/ears for cleaner overlay)
+COCO_DRAW_JOINTS = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+
+# Bone connections for Pose3D (pairs of joint names) — used by COM plumb line
+BONES_3D = [
     ("head", "neck"),
     ("neck", "left_shoulder"),
     ("neck", "right_shoulder"),
@@ -25,7 +53,7 @@ BONES = [
     ("right_knee", "right_ankle"),
 ]
 
-# Joint names for iteration
+# Joint names for Pose3D iteration
 JOINT_NAMES = [
     "head", "neck",
     "left_shoulder", "right_shoulder",
@@ -35,6 +63,9 @@ JOINT_NAMES = [
     "left_knee", "right_knee",
     "left_ankle", "right_ankle",
 ]
+
+# Confidence threshold below which joints/bones are not drawn
+MIN_CONFIDENCE = 0.3
 
 
 def _confidence_color(conf: float) -> tuple[int, int, int]:
@@ -47,174 +78,90 @@ def _confidence_color(conf: float) -> tuple[int, int, int]:
         return (0, 0, 255)     # Red
 
 
-def _project_to_2d(
-    point_3d: np.ndarray,
-    image_size: tuple[int, int],
-    cam_center: np.ndarray | None = None,
-    scale: float | None = None,
-) -> tuple[int, int]:
-    """
-    Simple orthographic projection from 3D to 2D pixel coordinates.
-
-    Args:
-        point_3d: 3D position (x, y, z) in Y-up system.
-        image_size: (height, width) of the output image.
-        cam_center: 3D center for the projection (default: auto).
-        scale: Pixels per meter (default: auto).
-
-    Returns:
-        (px, py) pixel coordinates.
-    """
-    h, w = image_size
-    # X maps to horizontal, Y maps to vertical (inverted)
-    if scale is None:
-        scale = min(w, h) * 0.4  # Rough default
-    if cam_center is None:
-        cam_center = np.array([0.0, 0.9, 0.0])  # Approximate body center
-
-    px = int(w / 2 + (point_3d[0] - cam_center[0]) * scale)
-    py = int(h / 2 - (point_3d[1] - cam_center[1]) * scale)
-    return (px, py)
-
-
 def draw_skeleton(
     frame: np.ndarray,
-    pose: Pose3D,
+    keypoints: Keypoints2D,
     joint_radius: int = 5,
     bone_thickness: int = 2,
 ) -> np.ndarray:
     """
-    Draw skeleton overlay on a frame — joint dots colored by confidence, bone lines.
+    Draw skeleton overlay using original 2D keypoints from ViTPose.
+
+    Uses the pixel-accurate 2D detections directly instead of projecting
+    3D poses back to 2D, which avoids alignment errors from the roundtrip.
 
     Args:
         frame: BGR image (H, W, 3), uint8. Modified in place.
-        pose: 3D pose data.
+        keypoints: Original 2D keypoint detections (COCO 17-joint format).
         joint_radius: Radius of joint circles in pixels.
         bone_thickness: Thickness of bone lines in pixels.
 
     Returns:
         The annotated frame.
     """
-    h, w = frame.shape[:2]
-    image_size = (h, w)
-    com = pose.com
-    cam_center = com.copy()
-
-    # Estimate pixels-per-meter from body height in 3D (head Y - ankle Y).
-    # Fall back to a fixed default if geometry is degenerate.
-    try:
-        head_y = pose.to_np("head")[1]
-        ankle_y = (pose.to_np("left_ankle")[1] + pose.to_np("right_ankle")[1]) / 2
-        body_height_m = abs(head_y - ankle_y)
-        if body_height_m > 0.2:
-            # Target body height ≈ 40% of min(frame_dim) in pixels
-            scale = (min(h, w) * 0.35) / body_height_m
-        else:
-            scale = min(w, h) * 0.4
-    except Exception:
-        scale = min(w, h) * 0.4
-
-    # Determine 2D screen anchor: use anchor_px (hip midpoint) if available,
-    # otherwise fall back to frame center.
-    if pose.anchor_px is not None:
-        anchor_x, anchor_y = float(pose.anchor_px[0]), float(pose.anchor_px[1])
-    else:
-        anchor_x, anchor_y = w / 2.0, h / 2.0
-
-    # The hip midpoint in 3D projects to anchor_px in 2D.
-    hip_3d = (pose.to_np("left_hip") + pose.to_np("right_hip")) / 2.0
-
-    def project(point_3d: np.ndarray) -> tuple[int, int]:
-        """Project 3D point to 2D pixel, anchored to skier's hip position.
-
-        MotionBERT outputs in Y-down / camera convention (more negative Y = higher).
-        Screen Y also increases downward, so dy maps directly: py = anchor_y + dy*scale.
-        """
-        dx = point_3d[0] - hip_3d[0]
-        dy = point_3d[1] - hip_3d[1]
-        px = int(anchor_x + dx * scale)
-        py = int(anchor_y + dy * scale)  # Y-down (MotionBERT) → screen Y-down
-        return (px, py)
+    points = keypoints.points    # (17, 2) as (x, y) pixels
+    conf = keypoints.confidence  # (17,)
 
     # Draw bones first (behind joints)
-    for j1_name, j2_name in BONES:
-        try:
-            p1 = pose.to_np(j1_name)
-            p2 = pose.to_np(j2_name)
-        except ValueError:
+    for j1_idx, j2_idx in COCO_BONES:
+        c1, c2 = conf[j1_idx], conf[j2_idx]
+        if c1 < MIN_CONFIDENCE or c2 < MIN_CONFIDENCE:
             continue
-        px1 = project(p1)
-        px2 = project(p2)
-        cv2.line(frame, px1, px2, (200, 200, 200), bone_thickness)
+        p1 = (int(points[j1_idx, 0]), int(points[j1_idx, 1]))
+        p2 = (int(points[j2_idx, 0]), int(points[j2_idx, 1]))
+        # Bone color: average confidence of endpoints
+        bone_color = _confidence_color((c1 + c2) / 2)
+        cv2.line(frame, p1, p2, bone_color, bone_thickness, cv2.LINE_AA)
 
     # Draw joints
-    for joint_name in JOINT_NAMES:
-        try:
-            pos = pose.to_np(joint_name)
-        except ValueError:
+    for j_idx in COCO_DRAW_JOINTS:
+        c = conf[j_idx]
+        if c < MIN_CONFIDENCE:
             continue
-        px = project(pos)
-
-        conf = 0.5  # Default
-        if pose.confidence and joint_name in pose.confidence:
-            conf = pose.confidence[joint_name]
-
-        color = _confidence_color(conf)
-        cv2.circle(frame, px, joint_radius, color, -1)
+        px = (int(points[j_idx, 0]), int(points[j_idx, 1]))
+        color = _confidence_color(c)
+        cv2.circle(frame, px, joint_radius, color, -1, cv2.LINE_AA)
 
     return frame
 
 
 def draw_com_plumb_line(
     frame: np.ndarray,
+    keypoints: Keypoints2D,
     pose: Pose3D,
-    line_length_m: float = 1.5,
+    line_length_px: int = 200,
     color: tuple[int, int, int] = (255, 165, 0),
     thickness: int = 2,
 ) -> np.ndarray:
     """
-    Draw a vertical plumb line from the center of mass downward.
+    Draw a vertical plumb line from the 2D hip midpoint (COM proxy) downward.
+
+    Uses the original 2D keypoints for positioning to stay aligned with the
+    skeleton overlay. The line extends straight down from the hip midpoint.
 
     Args:
         frame: BGR image (H, W, 3), uint8.
-        pose: 3D pose data.
-        line_length_m: Length of the plumb line in meters.
+        keypoints: Original 2D keypoint detections (COCO 17-joint format).
+        pose: 3D pose data (used for COM offset if needed in future).
+        line_length_px: Length of the plumb line in pixels.
         color: BGR color for the line.
         thickness: Line thickness in pixels.
 
     Returns:
         The annotated frame.
     """
-    h, w = frame.shape[:2]
-    image_size = (h, w)
-    com = pose.com
+    points = keypoints.points
+    conf = keypoints.confidence
 
-    # Use anchor_px for consistent positioning with draw_skeleton
-    if pose.anchor_px is not None:
-        anchor_x, anchor_y = float(pose.anchor_px[0]), float(pose.anchor_px[1])
-    else:
-        anchor_x, anchor_y = w / 2.0, h / 2.0
+    # Hip midpoint in 2D (COCO indices 11, 12)
+    if conf[11] < MIN_CONFIDENCE or conf[12] < MIN_CONFIDENCE:
+        return frame
 
-    hip_3d = (pose.to_np("left_hip") + pose.to_np("right_hip")) / 2.0
-    try:
-        head_y = pose.to_np("head")[1]
-        ankle_y = (pose.to_np("left_ankle")[1] + pose.to_np("right_ankle")[1]) / 2
-        body_height_m = abs(head_y - ankle_y)
-        scale = (min(h, w) * 0.35) / body_height_m if body_height_m > 0.2 else min(w, h) * 0.4
-    except Exception:
-        scale = min(w, h) * 0.4
+    hip_px = (points[11] + points[12]) / 2.0
+    start = (int(hip_px[0]), int(hip_px[1]))
+    end = (int(hip_px[0]), int(hip_px[1]) + line_length_px)
 
-    def project(point_3d: np.ndarray) -> tuple[int, int]:
-        dx = point_3d[0] - hip_3d[0]
-        dy = point_3d[1] - hip_3d[1]
-        return (int(anchor_x + dx * scale), int(anchor_y + dy * scale))
-
-    com_px = project(com)
-    ground_point = com.copy()
-    ground_point[1] += line_length_m  # Y-down: positive = lower on screen
-    ground_px = project(ground_point)
-
-    cv2.line(frame, com_px, ground_px, color, thickness)
+    cv2.line(frame, start, end, color, thickness, cv2.LINE_AA)
     return frame
 
 
