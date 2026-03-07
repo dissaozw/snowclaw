@@ -212,21 +212,25 @@ class TestTemporalConsistency:
         """Largest-bbox selection must ignore low-confidence outlier joints."""
         tracker = SubjectTracker(min_confidence=0.5)
 
-        # Person A: small but tight, all joints confident
+        # Person A: tight cluster, spread=20, all confident
         small = _make_kp(cy=300, cx=300, spread=20, conf=0.9)
 
-        # Person B: one joint far off-screen (low conf) that would inflate bbox if counted
+        # Person B: same spread, but one joint at origin (low conf) would inflate bbox
+        # to ~300*300=90000 vs small's ~40*40=1600 — without the fix, B always wins.
         large_fake = _make_kp(cy=300, cx=500, spread=20, conf=0.9)
         large_fake[0, 0] = 0.0    # y at top edge
         large_fake[0, 1] = 0.0    # x at left edge
-        large_fake[0, 2] = 0.1    # low confidence — should be excluded from area
+        large_fake[0, 2] = 0.1    # low confidence — must be excluded from area calc
 
-        # Without the fix, large_fake would "win" due to the outlier inflating its bbox.
-        # With the fix, both should have similar areas and small might even win.
-        r = tracker.select({0: small, 1: large_fake})
-        # Key assertion: result should NOT be driven by the garbage outlier joint
-        # (we don't prescribe which wins, but the outlier joint must not be the deciding factor)
-        assert r is not None
+        # With the fix, both have comparable bbox areas (spread=20).
+        # Without the fix, large_fake's area would be ~90000 vs small's ~1600.
+        from pose_estimation.subject_tracker import _bbox_area
+        area_small = _bbox_area(small, min_conf=0.5)
+        area_fake  = _bbox_area(large_fake, min_conf=0.5)
+        assert abs(area_fake - area_small) < area_small * 0.5, (
+            f"After filtering low-conf joints, areas should be comparable: "
+            f"small={area_small:.0f}, fake={area_fake:.0f}"
+        )
 
     def test_drift_boundary_condition(self):
         """A candidate at exactly max_drift_px should remain locked (<=, not <)."""
@@ -293,3 +297,67 @@ class TestTemporalConsistency:
             other_cx   = other_pos[:, 1].mean()
             assert abs(result_cx - subject_cx) < abs(result_cx - other_cx), \
                 f"Frame {step}: tracker should follow subject before crossing point"
+
+
+class TestNaNHandling:
+    """NaN/Inf keypoints must not poison tracker state or cause wrong selection."""
+
+    def test_nan_joint_does_not_propagate_to_centroid(self):
+        kp = _make_kp(cy=300, cx=400, conf=0.9)
+        kp[0, 0] = np.nan   # one NaN y-coordinate
+        c = _centroid(kp, min_conf=0.3)
+        assert np.all(np.isfinite(c)), f"centroid should be finite, got {c}"
+
+    def test_all_nan_joints_returns_zeros(self):
+        kp = _make_kp(cy=300, cx=400, conf=0.9)
+        kp[:, :2] = np.nan
+        c = _centroid(kp, min_conf=0.3)
+        assert np.all(np.isfinite(c)), "all-NaN fallback should return finite zeros"
+
+    def test_nan_bbox_area_is_zero_or_finite(self):
+        kp = _make_kp(cy=300, cx=400, conf=0.9)
+        kp[0, 0] = np.nan
+        area = _bbox_area(kp, min_conf=0.3)
+        assert np.isfinite(area), f"bbox area should be finite, got {area}"
+
+    def test_nan_joint_does_not_poison_tracker_state(self):
+        """NaN in frame 0 must not cause wrong selection in frame 1."""
+        tracker = SubjectTracker(max_drift_px=50)
+
+        # Frame 0: subject with one NaN joint
+        subject_nan = _make_kp(cy=300, cx=300, spread=20, conf=0.9)
+        subject_nan[0, 0] = np.nan
+        tracker.select({0: subject_nan})
+        assert np.all(np.isfinite(tracker._prev_centroid)), \
+            "Tracker centroid should be finite even after NaN joint"
+
+        # Frame 1: subject stays near (300,300), distractor is far (500,500)
+        subject_near = _make_kp(cy=305, cx=305, spread=20, conf=0.9)
+        distractor   = _make_kp(cy=500, cx=500, spread=20, conf=0.9)
+        result = tracker.select({0: subject_near, 1: distractor})
+        result_cx = result[:, 1].mean()
+        assert abs(result_cx - 305) < abs(result_cx - 500), \
+            "After NaN frame, tracker should still lock onto nearby subject"
+
+
+class TestConstructorValidation:
+    def test_invalid_min_confidence_above_one(self):
+        with pytest.raises(ValueError, match="min_confidence"):
+            SubjectTracker(min_confidence=1.5)
+
+    def test_invalid_min_confidence_below_zero(self):
+        with pytest.raises(ValueError, match="min_confidence"):
+            SubjectTracker(min_confidence=-0.1)
+
+    def test_invalid_min_confident_joints_zero(self):
+        with pytest.raises(ValueError, match="min_confident_joints"):
+            SubjectTracker(min_confident_joints=0)
+
+    def test_invalid_max_drift_px_negative(self):
+        with pytest.raises(ValueError, match="max_drift_px"):
+            SubjectTracker(max_drift_px=-1.0)
+
+    def test_valid_boundary_values(self):
+        # Should not raise
+        SubjectTracker(min_confidence=0.0, min_confident_joints=1, max_drift_px=0.0)
+        SubjectTracker(min_confidence=1.0)

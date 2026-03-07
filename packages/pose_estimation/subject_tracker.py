@@ -46,6 +46,12 @@ class SubjectTracker:
         min_confidence: float = _DEFAULT_MIN_CONFIDENCE,
         max_drift_px: float = _DEFAULT_MAX_DRIFT_PX,
     ) -> None:
+        if not (0.0 <= min_confidence <= 1.0):
+            raise ValueError(f"min_confidence must be in [0, 1], got {min_confidence}")
+        if min_confident_joints < 1:
+            raise ValueError(f"min_confident_joints must be >= 1, got {min_confident_joints}")
+        if max_drift_px < 0:
+            raise ValueError(f"max_drift_px must be >= 0, got {max_drift_px}")
         self.min_confident_joints = min_confident_joints
         self.min_confidence = min_confidence
         self.max_drift_px = max_drift_px
@@ -144,33 +150,45 @@ class SubjectTracker:
 
 def _centroid(kp: np.ndarray, min_conf: float = 0.3) -> np.ndarray:
     """
-    Compute (x, y) centroid of high-confidence keypoints.
+    Compute (x, y) centroid of high-confidence, finite keypoints.
 
     kp is (17, 3) in easy_ViTPose order: (y, x, conf).
     Returns centroid as (x, y) in pixel coordinates.
+
+    NaN/Inf coordinates are excluded to prevent poisoning the tracker state.
+    If no valid joints remain after filtering, falls back to all joints (NaNs
+    still excluded).
     """
     conf = kp[:, 2]
-    mask = conf >= min_conf
-    if not np.any(mask):
-        # Fall back to all joints if none meet threshold
-        mask = np.ones(len(kp), dtype=bool)
+    coords = kp[:, :2]
+    finite_mask = np.isfinite(coords).all(axis=1)
+    conf_mask = (conf >= min_conf) & finite_mask
+    if not np.any(conf_mask):
+        # Fall back to any finite joint
+        conf_mask = finite_mask
+    if not np.any(conf_mask):
+        # All joints are NaN/Inf — return zeros as last resort
+        return np.zeros(2, dtype=float)
     # easy_ViTPose stores (y, x) — swap to (x, y) for consistent pixel coords
-    xy = kp[mask][:, :2][:, ::-1]
+    xy = coords[conf_mask][:, ::-1]
     return xy.mean(axis=0)
 
 
 def _bbox_area(kp: np.ndarray, min_conf: float = 0.0) -> float:
     """
-    Bounding-box area over keypoints that meet the confidence threshold.
+    Bounding-box area over confident, finite keypoints.
 
-    Filtering to confident joints prevents a single misdetected joint at the
-    image border from inflating the bbox and skewing person-size estimates.
+    Filtering to confident and finite joints prevents:
+    - A single misdetected joint at the image border inflating the bbox
+    - NaN coordinates producing NaN area and poisoning selection logic
 
     kp is (17, 3) in (y, x, conf) order.
-    Returns 0.0 if no joints meet the threshold.
+    Returns 0.0 if no valid joints meet the threshold.
     """
     conf = kp[:, 2]
-    mask = conf >= min_conf
+    coords = kp[:, :2]
+    finite_mask = np.isfinite(coords).all(axis=1)
+    mask = (conf >= min_conf) & finite_mask
     if not np.any(mask):
         return 0.0
     ys = kp[mask, 0]
