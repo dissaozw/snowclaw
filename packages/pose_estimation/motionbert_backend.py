@@ -254,6 +254,10 @@ class MotionBERTBackend(PoseLifter3D):
                 center = MOTIONBERT_WINDOW_SIZE // 2
                 all_joints_3d[i] = output[0, center].cpu().numpy()
 
+        # MotionBERT outputs camera-space Y (Y-down).
+        # Flip to world Y-up so downstream metrics (com_height_pct etc.) are correct.
+        all_joints_3d[:, :, 1] *= -1
+
         # Apply temporal smoothing
         all_joints_3d = _apply_temporal_smoothing(
             all_joints_3d,
