@@ -159,3 +159,111 @@ class TestModelCache:
         )
         assert path1 == path2
         assert path2.exists()
+
+
+class TestMotionBERTYAxisFlip:
+    """
+    Regression tests for the MotionBERT Y-axis flip.
+
+    MotionBERT outputs camera-space Y (Y-down). The backend must negate Y so
+    that downstream code (com_height_pct etc.) works in world Y-up convention.
+    """
+
+    def _make_fake_kp2d(self, n_frames: int = 5) -> list:
+        """Generate minimal Keypoints2D list for lifting."""
+        import numpy as np
+        from pose_estimation.interfaces import Keypoints2D
+
+        rng = np.random.default_rng(0)
+        return [
+            Keypoints2D(
+                points=rng.uniform(100, 900, size=(17, 2)).astype(np.float32),
+                confidence=np.full(17, 0.9, dtype=np.float32),
+                image_size=(1080, 1920),
+            )
+            for _ in range(n_frames)
+        ]
+
+    def test_y_up_after_lift(self, monkeypatch):
+        """
+        After lifting, head Y must be greater than ankle Y (Y-up).
+        Simulates MotionBERT returning camera-space Y (inverted) and asserts the
+        backend flips it correctly.
+        """
+        import numpy as np
+        import torch
+        from pose_estimation.motionbert_backend import MotionBERTBackend, MOTIONBERT_WINDOW_SIZE
+
+        # Build a fake model output that mimics MotionBERT camera-Y convention:
+        # head (idx 0 / nose) has MORE NEGATIVE Y than ankles (idx 15, 16).
+        fake_joints_camera_y = np.zeros((17, 3), dtype=np.float32)
+        fake_joints_camera_y[0, 1] = -0.7   # nose — high in world → negative camera Y
+        fake_joints_camera_y[15, 1] = -0.05  # left_ankle — low in world → near-zero camera Y
+        fake_joints_camera_y[16, 1] = -0.05  # right_ankle
+
+        class FakeModel(torch.nn.Module):
+            def forward(self, x):
+                B, T, J, C = x.shape
+                out = torch.zeros(B, T, J, 3)
+                # Fill every frame with our fake camera-Y skeleton
+                out[:, :, :, :] = torch.from_numpy(fake_joints_camera_y)
+                return out
+
+        backend = MotionBERTBackend.__new__(MotionBERTBackend)
+        backend._model = FakeModel()
+        backend._smoothing_window = 3
+        backend._smoothing_poly = 2
+        backend._device = "cpu"
+
+        kp2d = self._make_fake_kp2d(n_frames=5)
+        poses = backend.lift(kp2d)
+
+        for pose in poses:
+            assert pose.head[1] > pose.ankle_midpoint[1], (
+                f"After Y-flip, head Y ({pose.head[1]:.3f}) should be above "
+                f"ankle Y ({pose.ankle_midpoint[1]:.3f}). "
+                "MotionBERT Y-axis flip may be missing."
+            )
+
+    def test_com_height_pct_nonzero_after_lift(self, monkeypatch):
+        """com_height_pct must not be 0 after the Y-axis fix."""
+        import numpy as np
+        import torch
+        from pose_estimation.motionbert_backend import MotionBERTBackend
+        from biomechanics.metrics import com_height_pct
+
+        fake_joints_camera_y = np.zeros((17, 3), dtype=np.float32)
+        fake_joints_camera_y[0, 1] = -0.70   # nose
+        fake_joints_camera_y[5, 1] = -0.55   # left_shoulder
+        fake_joints_camera_y[6, 1] = -0.55   # right_shoulder
+        fake_joints_camera_y[11, 1] = -0.30  # left_hip
+        fake_joints_camera_y[12, 1] = -0.30  # right_hip
+        fake_joints_camera_y[13, 1] = -0.15  # left_knee
+        fake_joints_camera_y[14, 1] = -0.15  # right_knee
+        fake_joints_camera_y[15, 1] = -0.02  # left_ankle
+        fake_joints_camera_y[16, 1] = -0.02  # right_ankle
+
+        class FakeModel(torch.nn.Module):
+            def forward(self, x):
+                B, T, J, _ = x.shape
+                out = torch.zeros(B, T, J, 3)
+                out[:, :, :, :] = torch.from_numpy(fake_joints_camera_y)
+                return out
+
+        backend = MotionBERTBackend.__new__(MotionBERTBackend)
+        backend._model = FakeModel()
+        backend._smoothing_window = 3
+        backend._smoothing_poly = 2
+        backend._device = "cpu"
+
+        kp2d = self._make_fake_kp2d(n_frames=5)
+        poses = backend.lift(kp2d)
+
+        for pose in poses:
+            h = com_height_pct(
+                pose.com,
+                pose.ankle_midpoint,
+                np.array([0.0, 1.0, 0.0]),
+                pose.body_height,
+            )
+            assert h > 0.0, f"com_height_pct={h} should be > 0 after Y-axis flip"
