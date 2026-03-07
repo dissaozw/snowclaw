@@ -125,11 +125,15 @@ def draw_skeleton(
     hip_3d = (pose.to_np("left_hip") + pose.to_np("right_hip")) / 2.0
 
     def project(point_3d: np.ndarray) -> tuple[int, int]:
-        """Project 3D point to 2D pixel, anchored to skier's hip position."""
+        """Project 3D point to 2D pixel, anchored to skier's hip position.
+
+        MotionBERT outputs in Y-down / camera convention (more negative Y = higher).
+        Screen Y also increases downward, so dy maps directly: py = anchor_y + dy*scale.
+        """
         dx = point_3d[0] - hip_3d[0]
         dy = point_3d[1] - hip_3d[1]
         px = int(anchor_x + dx * scale)
-        py = int(anchor_y - dy * scale)  # Y-up → screen Y-down
+        py = int(anchor_y + dy * scale)  # Y-down (MotionBERT) → screen Y-down
         return (px, py)
 
     # Draw bones first (behind joints)
@@ -203,11 +207,11 @@ def draw_com_plumb_line(
     def project(point_3d: np.ndarray) -> tuple[int, int]:
         dx = point_3d[0] - hip_3d[0]
         dy = point_3d[1] - hip_3d[1]
-        return (int(anchor_x + dx * scale), int(anchor_y - dy * scale))
+        return (int(anchor_x + dx * scale), int(anchor_y + dy * scale))
 
     com_px = project(com)
     ground_point = com.copy()
-    ground_point[1] -= line_length_m
+    ground_point[1] += line_length_m  # Y-down: positive = lower on screen
     ground_px = project(ground_point)
 
     cv2.line(frame, com_px, ground_px, color, thickness)
