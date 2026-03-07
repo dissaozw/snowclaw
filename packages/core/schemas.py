@@ -48,6 +48,10 @@ class Pose3D(BaseModel):
     left_knee: list[float] = Field(..., min_length=3, max_length=3)
     right_knee: list[float] = Field(..., min_length=3, max_length=3)
     left_ankle: list[float] = Field(..., min_length=3, max_length=3)
+
+    # 2D pixel anchor: (x, y) of the hip midpoint in the original frame.
+    # Used to anchor the 3D skeleton projection to the correct screen position.
+    anchor_px: Optional[list[float]] = Field(default=None, min_length=2, max_length=2)
     right_ankle: list[float] = Field(..., min_length=3, max_length=3)
 
     # Optional equipment keypoints

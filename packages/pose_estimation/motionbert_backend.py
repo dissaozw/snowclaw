@@ -266,6 +266,12 @@ class MotionBERTBackend(PoseLifter3D):
         for i in range(n_frames):
             confidence_2d = keypoints_2d[i].confidence
             pose = coco_keypoints_to_pose3d(all_joints_3d[i], confidence_2d)
+            # Anchor 3D projection to actual 2D hip pixel position
+            kp2d = keypoints_2d[i].points  # (K, 2) as (x, y)
+            left_hip_px = kp2d[11]   # COCO index 11
+            right_hip_px = kp2d[12]  # COCO index 12
+            hip_px = (left_hip_px + right_hip_px) / 2.0
+            pose.anchor_px = [float(hip_px[0]), float(hip_px[1])]
             poses.append(pose)
 
         return poses

@@ -98,8 +98,39 @@ def draw_skeleton(
     h, w = frame.shape[:2]
     image_size = (h, w)
     com = pose.com
-    scale = min(w, h) * 0.4
     cam_center = com.copy()
+
+    # Estimate pixels-per-meter from body height in 3D (head Y - ankle Y).
+    # Fall back to a fixed default if geometry is degenerate.
+    try:
+        head_y = pose.to_np("head")[1]
+        ankle_y = (pose.to_np("left_ankle")[1] + pose.to_np("right_ankle")[1]) / 2
+        body_height_m = abs(head_y - ankle_y)
+        if body_height_m > 0.2:
+            # Target body height ≈ 40% of min(frame_dim) in pixels
+            scale = (min(h, w) * 0.35) / body_height_m
+        else:
+            scale = min(w, h) * 0.4
+    except Exception:
+        scale = min(w, h) * 0.4
+
+    # Determine 2D screen anchor: use anchor_px (hip midpoint) if available,
+    # otherwise fall back to frame center.
+    if pose.anchor_px is not None:
+        anchor_x, anchor_y = float(pose.anchor_px[0]), float(pose.anchor_px[1])
+    else:
+        anchor_x, anchor_y = w / 2.0, h / 2.0
+
+    # The hip midpoint in 3D projects to anchor_px in 2D.
+    hip_3d = (pose.to_np("left_hip") + pose.to_np("right_hip")) / 2.0
+
+    def project(point_3d: np.ndarray) -> tuple[int, int]:
+        """Project 3D point to 2D pixel, anchored to skier's hip position."""
+        dx = point_3d[0] - hip_3d[0]
+        dy = point_3d[1] - hip_3d[1]
+        px = int(anchor_x + dx * scale)
+        py = int(anchor_y - dy * scale)  # Y-up → screen Y-down
+        return (px, py)
 
     # Draw bones first (behind joints)
     for j1_name, j2_name in BONES:
@@ -108,8 +139,8 @@ def draw_skeleton(
             p2 = pose.to_np(j2_name)
         except ValueError:
             continue
-        px1 = _project_to_2d(p1, image_size, cam_center, scale)
-        px2 = _project_to_2d(p2, image_size, cam_center, scale)
+        px1 = project(p1)
+        px2 = project(p2)
         cv2.line(frame, px1, px2, (200, 200, 200), bone_thickness)
 
     # Draw joints
@@ -118,7 +149,7 @@ def draw_skeleton(
             pos = pose.to_np(joint_name)
         except ValueError:
             continue
-        px = _project_to_2d(pos, image_size, cam_center, scale)
+        px = project(pos)
 
         conf = 0.5  # Default
         if pose.confidence and joint_name in pose.confidence:
@@ -153,13 +184,31 @@ def draw_com_plumb_line(
     h, w = frame.shape[:2]
     image_size = (h, w)
     com = pose.com
-    scale = min(w, h) * 0.4
-    cam_center = com.copy()
 
-    com_px = _project_to_2d(com, image_size, cam_center, scale)
+    # Use anchor_px for consistent positioning with draw_skeleton
+    if pose.anchor_px is not None:
+        anchor_x, anchor_y = float(pose.anchor_px[0]), float(pose.anchor_px[1])
+    else:
+        anchor_x, anchor_y = w / 2.0, h / 2.0
+
+    hip_3d = (pose.to_np("left_hip") + pose.to_np("right_hip")) / 2.0
+    try:
+        head_y = pose.to_np("head")[1]
+        ankle_y = (pose.to_np("left_ankle")[1] + pose.to_np("right_ankle")[1]) / 2
+        body_height_m = abs(head_y - ankle_y)
+        scale = (min(h, w) * 0.35) / body_height_m if body_height_m > 0.2 else min(w, h) * 0.4
+    except Exception:
+        scale = min(w, h) * 0.4
+
+    def project(point_3d: np.ndarray) -> tuple[int, int]:
+        dx = point_3d[0] - hip_3d[0]
+        dy = point_3d[1] - hip_3d[1]
+        return (int(anchor_x + dx * scale), int(anchor_y - dy * scale))
+
+    com_px = project(com)
     ground_point = com.copy()
-    ground_point[1] -= line_length_m  # Move down in Y-up system
-    ground_px = _project_to_2d(ground_point, image_size, cam_center, scale)
+    ground_point[1] -= line_length_m
+    ground_px = project(ground_point)
 
     cv2.line(frame, com_px, ground_px, color, thickness)
     return frame

@@ -81,9 +81,9 @@ class ViTPoseBackend(PoseEstimator2D):
             kp_dict = vitpose.inference(frame)
 
             if kp_dict:
-                # Take first (only) person — kp shape is (K, 3) as (x, y, conf)
+                # easy_ViTPose returns (K, 3) in (y, x, conf) order — swap to (x, y)
                 kp = next(iter(kp_dict.values()))
-                points = kp[:, :2].copy()  # (K, 2) as (x, y)
+                points = kp[:, :2][:, ::-1].copy()  # (K, 2) as (x, y)
                 confidence = kp[:, 2].copy()  # (K,)
             else:
                 points = np.zeros((VITPOSE_NUM_KEYPOINTS, 2), dtype=np.float32)
