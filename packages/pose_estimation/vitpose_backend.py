@@ -39,12 +39,10 @@ class ViTPoseBackend(PoseEstimator2D):
         self,
         model_path: str | None = None,
         device: str = "auto",
-        batch_size: int = 16,
         max_drift_px: float = 300.0,
         min_confident_joints: int = 5,
         min_confidence: float = 0.3,
     ):
-        self.batch_size = batch_size
         self._device = None if device == "auto" else device
         self._model_path = model_path
         self._vitpose = None

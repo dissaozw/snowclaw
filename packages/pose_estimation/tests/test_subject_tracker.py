@@ -28,11 +28,6 @@ def _make_kp(
     return kp
 
 
-def _make_detection(**persons: np.ndarray) -> dict[int, np.ndarray]:
-    """Build a detection dict from keyword args: person_id=kp."""
-    return {i: kp for i, (_, kp) in enumerate(persons.items())}
-
-
 # ---------------------------------------------------------------------------
 # _centroid / _bbox_area helpers
 # ---------------------------------------------------------------------------
@@ -232,3 +227,69 @@ class TestTemporalConsistency:
         # Key assertion: result should NOT be driven by the garbage outlier joint
         # (we don't prescribe which wins, but the outlier joint must not be the deciding factor)
         assert r is not None
+
+    def test_drift_boundary_condition(self):
+        """A candidate at exactly max_drift_px should remain locked (<=, not <)."""
+        tracker = SubjectTracker(max_drift_px=100.0)
+        subject = _make_kp(cy=300, cx=300, spread=0, conf=0.9)
+        tracker.select({0: subject})
+
+        # Place next detection exactly 100px away (at the boundary)
+        at_boundary = _make_kp(cy=300, cx=400, spread=0, conf=0.9)  # cx diff = 100
+        result = tracker.select({0: at_boundary})
+        assert np.allclose(result, at_boundary), \
+            "Candidate at exactly max_drift_px should be accepted (<=, not <)"
+
+    def test_exact_threshold_joints(self):
+        """Detection with exactly min_confident_joints at exactly min_confidence passes."""
+        tracker = SubjectTracker(min_confident_joints=5, min_confidence=0.3)
+        kp = _make_kp(cy=300, cx=300, conf=0.0)   # all low
+        kp[:5, 2] = 0.3   # exactly 5 joints at exactly 0.3
+        result = tracker.select({0: kp})
+        assert result is not None, \
+            "Exactly min_confident_joints at exactly min_confidence should pass the filter"
+
+    def test_multi_frame_dropout_recovery(self):
+        """After 10 consecutive empty frames, tracker recovers to the nearest subject."""
+        tracker = SubjectTracker(max_drift_px=300)
+        subject = _make_kp(cy=300, cx=400, spread=60, conf=0.9)
+        tracker.select({0: subject})
+
+        # 10 consecutive empty frames
+        for _ in range(10):
+            assert tracker.select({}) is None
+
+        # Centroid should be preserved — nearby subject picked over far distractor
+        subject_back = _make_kp(cy=310, cx=410, spread=60, conf=0.9)
+        distractor = _make_kp(cy=50, cx=50, spread=20, conf=0.9)
+        result = tracker.select({0: subject_back, 1: distractor})
+        assert np.allclose(result, subject_back), \
+            "After 10 empty frames, should re-lock onto subject near last known position"
+
+    def test_crossing_subjects_before_overlap(self):
+        """
+        Two skiers moving toward each other — tracker stays on subject until they overlap.
+
+        NOTE: Centroid-only tracking cannot resolve identity after full crossing
+        (when the two skiers swap positions). This test verifies correct behaviour
+        *before* the crossing point. Post-crossing identity recovery requires
+        person-ID tracking (e.g. ByteTrack) which is out of scope for SubjectTracker.
+        """
+        tracker = SubjectTracker(max_drift_px=200)
+
+        # Frame 0: subject on left (cx=200), other skier on right (cx=600)
+        subject = _make_kp(cy=300, cx=200, spread=30, conf=0.9)
+        other   = _make_kp(cy=300, cx=600, spread=30, conf=0.9)
+        tracker.select({0: subject, 1: other})
+
+        # Frames 1-3: skiers approach but have not yet crossed (subject stays closer
+        # to previous centroid than the other skier)
+        for step in range(1, 4):
+            subject_pos = _make_kp(cy=300, cx=200 + step * 60, spread=30, conf=0.9)
+            other_pos   = _make_kp(cy=300, cx=600 - step * 60, spread=30, conf=0.9)
+            result = tracker.select({0: subject_pos, 1: other_pos})
+            result_cx = result[:, 1].mean()
+            subject_cx = subject_pos[:, 1].mean()
+            other_cx   = other_pos[:, 1].mean()
+            assert abs(result_cx - subject_cx) < abs(result_cx - other_cx), \
+                f"Frame {step}: tracker should follow subject before crossing point"
