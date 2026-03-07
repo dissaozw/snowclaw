@@ -7,6 +7,7 @@ backends (ViTPose+, MotionBERT) using ONNX Runtime.
 
 from .interfaces import Keypoints2D, PoseEstimator2D, PoseLifter3D
 from .joint_mapping import COCO_TO_POSE3D, coco_keypoints_to_pose3d
+from .subject_tracker import SubjectTracker
 from .model_cache import download_model
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "PoseLifter3D",
     "COCO_TO_POSE3D",
     "coco_keypoints_to_pose3d",
+    "SubjectTracker",
     "download_model",
 ]

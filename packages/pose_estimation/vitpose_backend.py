@@ -2,6 +2,14 @@
 
 Uses VitInference which handles the full pipeline:
 YOLOv8 person detection → crop → ViTPose inference → heatmap decoding.
+
+Subject locking:
+    When multiple people are detected the SubjectTracker selects the best
+    candidate using a two-stage strategy:
+      1. First frame  → largest keypoint bounding-box (closest-to-camera heuristic).
+      2. Later frames → centroid nearest to the previous frame's selection,
+                        falling back to largest-bbox if drift exceeds the threshold.
+    A minimum-confidence gate filters out shadows and blurry background figures.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 
 from .interfaces import Keypoints2D, PoseEstimator2D
+from .subject_tracker import SubjectTracker
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +32,7 @@ class ViTPoseBackend(PoseEstimator2D):
 
     Detects 17 COCO-format keypoints per frame using easy_ViTPose's
     VitInference, which handles preprocessing and postprocessing correctly.
+    A SubjectTracker is used to lock onto a single person across frames.
     """
 
     def __init__(
@@ -30,11 +40,19 @@ class ViTPoseBackend(PoseEstimator2D):
         model_path: str | None = None,
         device: str = "auto",
         batch_size: int = 16,
+        max_drift_px: float = 300.0,
+        min_confident_joints: int = 5,
+        min_confidence: float = 0.3,
     ):
         self.batch_size = batch_size
         self._device = None if device == "auto" else device
         self._model_path = model_path
         self._vitpose = None
+        self._tracker = SubjectTracker(
+            min_confident_joints=min_confident_joints,
+            min_confidence=min_confidence,
+            max_drift_px=max_drift_px,
+        )
 
     def _get_vitpose(self):
         """Lazy-load VitInference."""
@@ -53,11 +71,13 @@ class ViTPoseBackend(PoseEstimator2D):
         )
         logger.info("Loading VitInference (model=%s, yolo=%s)", vit_path, yolo_path)
 
+        # single_pose=False so we receive all detected people and can apply
+        # our own subject-lock logic via SubjectTracker.
         self._vitpose = VitInference(
             model=vit_path,
             yolo=yolo_path,
             is_video=True,
-            single_pose=True,
+            single_pose=False,
             device=self._device,
         )
         return self._vitpose
@@ -69,22 +89,26 @@ class ViTPoseBackend(PoseEstimator2D):
             frames: List of RGB images (H, W, 3), uint8.
 
         Returns:
-            List of Keypoints2D, one per frame.
+            List of Keypoints2D, one per frame.  When no valid person is
+            detected the keypoints and confidences are all-zero.
         """
         vitpose = self._get_vitpose()
         vitpose.reset()
+        self._tracker.reset()
         results: list[Keypoints2D] = []
 
         for frame in frames:
             image_size = (frame.shape[0], frame.shape[1])
 
+            # kp_dict: {person_id: ndarray(17, 3)} in (y, x, conf) order
             kp_dict = vitpose.inference(frame)
 
-            if kp_dict:
-                # easy_ViTPose returns (K, 3) in (y, x, conf) order — swap to (x, y)
-                kp = next(iter(kp_dict.values()))
-                points = kp[:, :2][:, ::-1].copy()  # (K, 2) as (x, y)
-                confidence = kp[:, 2].copy()  # (K,)
+            selected = self._tracker.select(kp_dict) if kp_dict else None
+
+            if selected is not None:
+                # Swap (y, x) → (x, y) for downstream consumers
+                points = selected[:, :2][:, ::-1].copy()
+                confidence = selected[:, 2].copy()
             else:
                 points = np.zeros((VITPOSE_NUM_KEYPOINTS, 2), dtype=np.float32)
                 confidence = np.zeros(VITPOSE_NUM_KEYPOINTS, dtype=np.float32)
