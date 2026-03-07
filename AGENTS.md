@@ -33,6 +33,14 @@ snowclaw/
 └── tests/
 ```
 
+## Environment
+
+- **Always use `uv`** — never `pip` or bare `python3` for this project.
+- Create/sync the venv: `uv sync` (reads `pyproject.toml` + `uv.lock`)
+- Run commands: `uv run python -m snowclaw.cli ...` or `uv run pytest`
+- Add deps: `uv add <package>` (updates `pyproject.toml` + `uv.lock`)
+- The `.venv/` is at repo root — activate with `source .venv/bin/activate` if needed for interactive use.
+
 ## Conventions
 
 - **Language**: Python 3.11+ for backend/ML, TypeScript for frontend.

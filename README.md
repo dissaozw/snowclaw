@@ -41,14 +41,20 @@ Open-source AI skiing & snowboarding instructor that transforms amateur video in
 git clone https://github.com/snowcoach-ai/snowcoach.git
 cd snowcoach
 
+# Install dependencies (requires uv — https://docs.astral.sh/uv/)
+uv sync
+
 # Start development environment
 docker compose up -d
 
 # Download pretrained models
-python scripts/download_models.py
+uv run python scripts/download_models.py
 
 # Run the pipeline on a sample video
-python -m packages.api.cli analyze --video samples/ski_demo.mp4
+PYTHONPATH=packages uv run python -m snowclaw.cli process data/samples/ski_demo.mp4 --output-dir ./results/
+
+# Run with mock backends (no model download, validates pipeline end-to-end)
+PYTHONPATH=packages uv run python -m snowclaw.cli process data/samples/ski_demo.mp4 --output-dir ./results/ --mock
 
 # Start the web viewer
 cd packages/web && npm install && npm run dev
@@ -98,9 +104,9 @@ openspec init
 Python linting uses [ruff](https://docs.astral.sh/ruff/), configured in `pyproject.toml`:
 
 ```bash
-pip install -e ".[dev]"
-ruff check packages/
-ruff format packages/
+uv sync
+uv run ruff check packages/
+uv run ruff format packages/
 ```
 
 ## Contributing
