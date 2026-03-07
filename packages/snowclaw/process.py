@@ -69,6 +69,56 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    # crop subcommand
+    crop_parser = subparsers.add_parser(
+        "crop",
+        help="Crop a video to follow a specific tracked person",
+    )
+    crop_parser.add_argument(
+        "video",
+        type=str,
+        help="Path to the input video file",
+    )
+    crop_parser.add_argument(
+        "--output", "-o",
+        type=str,
+        default=None,
+        help="Output video path (default: <input>_cropped.mp4)",
+    )
+    crop_parser.add_argument(
+        "--track-id",
+        type=int,
+        default=None,
+        help=(
+            "Track ID of the person to follow. "
+            "If omitted, auto-selects the most prominent person (largest bbox area)."
+        ),
+    )
+    crop_parser.add_argument(
+        "--padding",
+        type=float,
+        default=0.4,
+        help="Fractional padding around the person bbox (default: 0.4)",
+    )
+    crop_parser.add_argument(
+        "--smooth",
+        type=int,
+        default=45,
+        help="Smoothing window in frames to reduce crop jitter (default: 45)",
+    )
+    crop_parser.add_argument(
+        "--out-width",
+        type=int,
+        default=848,
+        help="Output video width in pixels (default: 848)",
+    )
+    crop_parser.add_argument(
+        "--out-height",
+        type=int,
+        default=476,
+        help="Output video height in pixels (default: 476)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -77,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "process":
         return _process_video(args)
+
+    if args.command == "crop":
+        from .crop import run_crop
+        return run_crop(args)
 
     return 0
 
