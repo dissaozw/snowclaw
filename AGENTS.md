@@ -79,6 +79,13 @@ This project uses **OpenSpec** (`openspec`, globally installed) for spec-driven 
 - **Always check `tasks.md` for the current checklist** — implement only what's specified, in order.
 - Mark tasks complete in `tasks.md` as you finish them.
 
+## Git Workflow
+
+- **Always develop on a feature branch** — never commit directly to `main`.
+- Branch naming: `feat/<name>`, `fix/<name>`, `chore/<name>`.
+- Open a PR to `main` when the work is ready for review.
+- Push the branch: `git push -u origin <branch>`, then `gh pr create`.
+
 ## Guidelines for Agents
 
 - Read `PLAN.md` before making architectural decisions — it contains detailed rationale for technology choices.
