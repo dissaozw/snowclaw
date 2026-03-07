@@ -11,6 +11,12 @@ False-positive filter:
   Detections with fewer than `min_confident_joints` keypoints above `min_confidence`
   are discarded before selection.  This suppresses shadows and blurry background figures
   that YOLO sometimes picks up.
+
+Resolution note:
+  `max_drift_px` is in **pixel** units and is therefore resolution-dependent.
+  The default (300 px) is calibrated for ~1080p footage at 30 fps.  For 4K footage
+  multiply by ~2; for 720p divide by ~1.5.  A future improvement would normalise by
+  image diagonal automatically.
 """
 
 from __future__ import annotations
@@ -20,7 +26,7 @@ import numpy as np
 
 _DEFAULT_MIN_CONFIDENT_JOINTS = 5   # require at least 5 joints above threshold
 _DEFAULT_MIN_CONFIDENCE = 0.3       # per-joint confidence threshold
-_DEFAULT_MAX_DRIFT_PX = 300.0       # max centroid movement between consecutive frames
+_DEFAULT_MAX_DRIFT_PX = 300.0       # max centroid movement between consecutive frames (1080p)
 
 
 class SubjectTracker:
@@ -63,13 +69,14 @@ class SubjectTracker:
         Args:
             detections: Mapping of person-id → keypoints array of shape (17, 3),
                         where columns are (y, x, confidence) — easy_ViTPose order.
+                        An empty dict is valid input and returns None.
 
         Returns:
             Selected keypoints array (17, 3) or None if no valid detection.
         """
         candidates = self._filter(detections)
         if not candidates:
-            # No valid detection — keep previous centroid so next frame can recover
+            # No valid detection — preserve previous centroid so next frame can recover
             return None
 
         if self._prev_centroid is None:
@@ -77,7 +84,7 @@ class SubjectTracker:
         else:
             chosen = self._nearest(candidates)
 
-        # Update centroid from high-confidence joints (x, y order)
+        # Update state from high-confidence joints only
         self._prev_centroid = _centroid(chosen, self.min_confidence)
         return chosen
 
@@ -92,33 +99,40 @@ class SubjectTracker:
         valid = []
         for kp in detections.values():
             conf = kp[:, 2]
-            if np.sum(conf >= self.min_confidence) >= self.min_confident_joints:
+            if int(np.sum(conf >= self.min_confidence)) >= self.min_confident_joints:
                 valid.append(kp)
         return valid
 
     def _largest(self, candidates: list[np.ndarray]) -> np.ndarray:
-        """Pick the candidate with the largest keypoint bounding-box area."""
-        return max(candidates, key=_bbox_area)
+        """Pick the candidate with the largest bounding-box over *confident* joints.
+
+        Using only confident joints prevents a single garbage/misplaced joint from
+        inflating the bounding box and causing a false-positive to "win".
+        """
+        return max(candidates, key=lambda kp: _bbox_area(kp, self.min_confidence))
 
     def _nearest(self, candidates: list[np.ndarray]) -> np.ndarray:
         """
         Pick the candidate whose centroid is closest to the previous centroid.
         Falls back to largest-bbox if all candidates exceed max_drift_px.
         """
-        assert self._prev_centroid is not None
+        if self._prev_centroid is None:
+            raise RuntimeError("_nearest called before _prev_centroid is set")
 
-        best: np.ndarray | None = None
-        best_dist = float("inf")
+        best_kp = candidates[0]
+        best_dist = float(np.linalg.norm(
+            _centroid(candidates[0], self.min_confidence) - self._prev_centroid
+        ))
 
-        for kp in candidates:
+        for kp in candidates[1:]:
             c = _centroid(kp, self.min_confidence)
             dist = float(np.linalg.norm(c - self._prev_centroid))
             if dist < best_dist:
                 best_dist = dist
-                best = kp
+                best_kp = kp
 
         if best_dist <= self.max_drift_px:
-            return best  # type: ignore[return-value]
+            return best_kp
 
         # Drift too large — subject likely left frame, pick largest new detection
         return self._largest(candidates)
@@ -133,24 +147,32 @@ def _centroid(kp: np.ndarray, min_conf: float = 0.3) -> np.ndarray:
     Compute (x, y) centroid of high-confidence keypoints.
 
     kp is (17, 3) in easy_ViTPose order: (y, x, conf).
-    Returns centroid in (x, y) pixel order.
+    Returns centroid as (x, y) in pixel coordinates.
     """
     conf = kp[:, 2]
     mask = conf >= min_conf
     if not np.any(mask):
-        # Fall back to all joints
+        # Fall back to all joints if none meet threshold
         mask = np.ones(len(kp), dtype=bool)
-    # easy_ViTPose (y, x) → swap to (x, y)
+    # easy_ViTPose stores (y, x) — swap to (x, y) for consistent pixel coords
     xy = kp[mask][:, :2][:, ::-1]
     return xy.mean(axis=0)
 
 
-def _bbox_area(kp: np.ndarray) -> float:
+def _bbox_area(kp: np.ndarray, min_conf: float = 0.0) -> float:
     """
-    Bounding-box area of keypoints (all joints, ignoring confidence).
+    Bounding-box area over keypoints that meet the confidence threshold.
+
+    Filtering to confident joints prevents a single misdetected joint at the
+    image border from inflating the bbox and skewing person-size estimates.
 
     kp is (17, 3) in (y, x, conf) order.
+    Returns 0.0 if no joints meet the threshold.
     """
-    ys = kp[:, 0]
-    xs = kp[:, 1]
+    conf = kp[:, 2]
+    mask = conf >= min_conf
+    if not np.any(mask):
+        return 0.0
+    ys = kp[mask, 0]
+    xs = kp[mask, 1]
     return float((ys.max() - ys.min()) * (xs.max() - xs.min()))
