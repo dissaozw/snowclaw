@@ -138,10 +138,11 @@ class TestFullSuite:
         import video_pipeline
         import pose_estimation
         import video_annotation
-        import cli
+        import snowclaw
 
         assert core.Pose3D is not None
         assert biomechanics.edge_angle is not None
         assert video_pipeline.extract_frames is not None
         assert pose_estimation.Keypoints2D is not None
         assert video_annotation.annotate_frames is not None
+        assert snowclaw is not None

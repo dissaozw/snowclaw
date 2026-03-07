@@ -43,7 +43,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["biomechanics", "core", "video_pipeline", "pose_estimation", "video_annotation", "cli", "api"]
+known-first-party = ["biomechanics", "core", "video_pipeline", "pose_estimation", "video_annotation", "snowclaw", "api"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["packages"]

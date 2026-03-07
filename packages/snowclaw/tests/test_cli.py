@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from cli.process import main
+from snowclaw.cli import main
 
 
 class TestCLIProcess:

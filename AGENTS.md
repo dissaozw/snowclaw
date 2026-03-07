@@ -60,9 +60,21 @@ snowclaw/
 - 🔲 3D viewer (React Three Fiber)
 - 🔲 FastAPI backend with async pipeline
 
+## OpenSpec Workflow
+
+This project uses **OpenSpec** (`openspec`, globally installed) for spec-driven development.
+
+- All change proposals live in `openspec/changes/<change-name>/`
+- Before implementing new features, check if a proposal exists: `ls openspec/changes/`
+- Key files per proposal: `proposal.md`, `design.md`, `tasks.md`, `specs/`
+- Commands: `openspec propose`, `openspec apply`, `openspec archive`, `openspec explore`
+- **Always check `tasks.md` for the current checklist** — implement only what's specified, in order.
+- Mark tasks complete in `tasks.md` as you finish them.
+
 ## Guidelines for Agents
 
 - Read `PLAN.md` before making architectural decisions — it contains detailed rationale for technology choices.
+- Check `openspec/changes/` for any active proposals before starting implementation work.
 - New packages should follow the `biomechanics` package as a structural template (module + schemas + tests + README).
 - Keep ML inference code behind abstract interfaces so models are swappable (pluggable backend pattern).
 - Tests are required — run with `pytest` from repo root.
