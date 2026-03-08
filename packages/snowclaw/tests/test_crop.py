@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +12,7 @@ import pytest
 
 from snowclaw.crop import (
     _build_crop_trajectory,
+    _render_crop_opencv,
     _select_track,
     _smooth,
 )
@@ -122,6 +125,79 @@ class TestBuildCropTrajectory:
         assert len(cx_arr) == 20
         assert not np.any(np.isnan(cx_arr))
 
+    def test_tiny_input_clamps_crop_to_video(self):
+        dets = self._make_detections(n=5, bw=20, bh=20)
+        _, _, cw, ch = _build_crop_trajectory(
+            dets, total_frames=5, video_w=63, video_h=47
+        )
+        assert cw <= 63
+        assert ch <= 47
+        assert cw > 0
+        assert ch > 0
+
+
+class TestRenderCropOpenCV:
+    def test_raises_runtime_error_with_ffmpeg_stderr_and_cleans_up(self, tmp_path):
+        released = {"value": False}
+        stdin_closed = {"value": False}
+
+        class FakeVideoCapture:
+            def __init__(self, _path):
+                self._reads = 0
+
+            def read(self):
+                if self._reads == 0:
+                    self._reads += 1
+                    return True, np.zeros((100, 100, 3), dtype=np.uint8)
+                return False, None
+
+            def release(self):
+                released["value"] = True
+
+        class FakeStdin:
+            def __init__(self):
+                self.closed = False
+
+            def write(self, _data):
+                raise BrokenPipeError("ffmpeg died")
+
+            def close(self):
+                self.closed = True
+                stdin_closed["value"] = True
+
+        fake_stdin = FakeStdin()
+        fake_proc = MagicMock()
+        fake_proc.stdin = fake_stdin
+        fake_proc.wait.return_value = 1
+        fake_proc.stderr.read.return_value = "encoder unavailable"
+
+        fake_cv2 = types.SimpleNamespace(
+            VideoCapture=FakeVideoCapture,
+            resize=lambda frame, size, interpolation=None: frame,
+            INTER_LANCZOS4=1,
+        )
+
+        with patch("snowclaw.crop.subprocess.Popen", return_value=fake_proc):
+            with patch.dict("sys.modules", {"cv2": fake_cv2}):
+                with pytest.raises(RuntimeError, match="encoder unavailable"):
+                    _render_crop_opencv(
+                        video_path=tmp_path / "in.mp4",
+                        cx_arr=np.array([50.0]),
+                        cy_arr=np.array([50.0]),
+                        crop_w=20,
+                        crop_h=20,
+                        video_w=100,
+                        video_h=100,
+                        output_path=tmp_path / "out.mp4",
+                        out_w=10,
+                        out_h=10,
+                        fps=30.0,
+                    )
+
+        assert released["value"] is True
+        assert stdin_closed["value"] is True
+        assert fake_proc.wait.called
+
 
 # ---------------------------------------------------------------------------
 # CLI integration test — uses the sample video + mock tracking
@@ -137,41 +213,52 @@ def test_crop_end_to_end_mock(tmp_path):
 
     output = tmp_path / "out_crop.mp4"
 
-    # Build fake YOLO results — one person, fixed bbox, 30 frames
-    fake_box = MagicMock()
-    fake_box.xyxy.cpu().numpy.return_value = np.array([[100.0, 80.0, 300.0, 380.0]])
-    fake_box.id.cpu().numpy.return_value = np.array([1])
+    args = argparse.Namespace(
+        video=str(sample),
+        output=str(output),
+        track_id=None,
+        padding=0.4,
+        smooth=15,
+        out_width=848,
+        out_height=476,
+    )
 
-    fake_result = MagicMock()
-    fake_result.boxes = fake_box
-
-    # Patch YOLO in the crop module (not in ultralytics directly, so it works
-    # in-process without crossing subprocess boundaries)
-    with patch("snowclaw.crop.YOLO", create=True) as MockYOLO:
-        instance = MockYOLO.return_value
-        instance.track.return_value = iter([fake_result] * 30)
-
-        from snowclaw.crop import _track_persons, _select_track, _build_crop_trajectory, _render_crop_opencv
-        import argparse, cv2
-
-        # Build minimal args namespace
-        args = argparse.Namespace(
-            video=str(sample),
-            output=str(output),
-            track_id=None,
-            padding=0.4,
-            smooth=15,
-            out_width=848,
-            out_height=476,
+    with patch("snowclaw.crop._track_persons") as mock_track:
+        mock_track.return_value = (
+            {1: [(i, 100.0, 80.0, 300.0, 380.0) for i in range(30)]},
+            30,
         )
-
-        with patch("snowclaw.crop._track_persons") as mock_track:
-            mock_track.return_value = (
-                {1: [(i, 100.0, 80.0, 300.0, 380.0) for i in range(30)]},
-                30,
-            )
-            from snowclaw.crop import run_crop
-            rc = run_crop(args)
+        from snowclaw.crop import run_crop
+        rc = run_crop(args)
 
     assert rc == 0
     assert output.exists()
+
+
+def test_run_crop_warns_for_frame_count_mismatch(tmp_path):
+    from snowclaw.crop import run_crop
+
+    video_path = tmp_path / "input.mp4"
+    video_path.write_bytes(b"placeholder")
+    output = tmp_path / "output.mp4"
+
+    fake_cap = MagicMock()
+    fake_cap.get.side_effect = [640, 360, 10, 30.0]
+    args = argparse.Namespace(
+        video=str(video_path),
+        output=str(output),
+        track_id=None,
+        padding=0.4,
+        smooth=15,
+        out_width=320,
+        out_height=180,
+    )
+
+    with patch("cv2.VideoCapture", return_value=fake_cap):
+        with patch("snowclaw.crop._track_persons", return_value=({1: [(i, 0, 0, 30, 30) for i in range(12)]}, 12)):
+            with patch("snowclaw.crop._render_crop_opencv") as mock_render:
+                with pytest.warns(RuntimeWarning, match="Frame count mismatch"):
+                    rc = run_crop(args)
+
+    assert rc == 0
+    assert mock_render.called

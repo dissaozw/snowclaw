@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,6 @@ def _smooth(arr: np.ndarray, window: int = 31) -> np.ndarray:
 
 def _track_persons(
     video_path: Path,
-    track_id: int | None,
 ) -> tuple[dict[int, list[tuple]], int]:
     """
     Run YOLO ByteTrack on the video and return per-frame bboxes keyed by track ID.
@@ -130,10 +130,16 @@ def _build_crop_trajectory(
     # Fixed crop size: 90th-percentile bbox + padding (avoids size oscillation)
     med_bw = float(np.percentile(bw_arr, 90))
     med_bh = float(np.percentile(bh_arr, 90))
-    crop_w = min(video_w, int(med_bw * (1 + pad * 2))) & ~1
-    crop_h = min(video_h, int(med_bh * (1 + pad * 2))) & ~1
-    crop_w = max(crop_w, 64)
-    crop_h = max(crop_h, 64)
+    base_crop_w = max(int(med_bw * (1 + pad * 2)), 64)
+    base_crop_h = max(int(med_bh * (1 + pad * 2)), 64)
+    max_even_w = (video_w & ~1) or video_w
+    max_even_h = (video_h & ~1) or video_h
+    crop_w = min(base_crop_w, max_even_w)
+    crop_h = min(base_crop_h, max_even_h)
+    if crop_w > 1 and crop_w % 2:
+        crop_w -= 1
+    if crop_h > 1 and crop_h % 2:
+        crop_h -= 1
 
     return cx_arr, cy_arr, crop_w, crop_h
 
@@ -173,27 +179,47 @@ def _render_crop_opencv(
         "-c:a", "copy",
         str(output_path),
     ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
     cap = cv2.VideoCapture(str(video_path))
     frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        i = min(frame_idx, len(cx_arr) - 1)
-        cx = cx_arr[i]
-        cy = cy_arr[i]
-        x = int(np.clip(cx - crop_w / 2, 0, video_w - crop_w))
-        y = int(np.clip(cy - crop_h / 2, 0, video_h - crop_h))
-        cropped = frame[y : y + crop_h, x : x + crop_w]
-        resized = cv2.resize(cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
-        proc.stdin.write(resized.tobytes())
-        frame_idx += 1
-
-    cap.release()
-    proc.stdin.close()
-    proc.wait()
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            i = min(frame_idx, len(cx_arr) - 1)
+            cx = cx_arr[i]
+            cy = cy_arr[i]
+            x = int(np.clip(cx - crop_w / 2, 0, video_w - crop_w))
+            y = int(np.clip(cy - crop_h / 2, 0, video_h - crop_h))
+            cropped = frame[y : y + crop_h, x : x + crop_w]
+            resized = cv2.resize(cropped, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
+            proc.stdin.write(resized.tobytes())
+            frame_idx += 1
+    except BrokenPipeError:
+        # Defer error reporting to ffmpeg stderr/return code after cleanup.
+        pass
+    finally:
+        cap.release()
+        if proc.stdin is not None and not proc.stdin.closed:
+            proc.stdin.close()
+        return_code = proc.wait()
+        if return_code != 0:
+            stderr_raw = proc.stderr.read() if proc.stderr is not None else b""
+            stderr = (
+                stderr_raw.decode("utf-8", errors="replace")
+                if isinstance(stderr_raw, bytes)
+                else str(stderr_raw)
+            ).strip()
+            msg = f"ffmpeg crop encode failed with code {return_code}"
+            if stderr:
+                msg = f"{msg}: {stderr}"
+            raise RuntimeError(msg)
 
 
 def run_crop(args) -> int:
@@ -219,7 +245,7 @@ def run_crop(args) -> int:
     print(f"  Input: {video_w}x{video_h} @ {fps:.1f}fps, {total_frames} frames")
 
     # Step 1: Track all persons
-    tracks, n_frames = _track_persons(video_path, args.track_id)
+    tracks, n_frames = _track_persons(video_path)
     if not tracks:
         print("Error: No persons detected in video.", file=sys.stderr)
         return 1
@@ -229,10 +255,22 @@ def run_crop(args) -> int:
     detections = sorted(tracks[chosen_id], key=lambda d: d[0])
     print(f"  Tracking person #{chosen_id} across {len(detections)} frames")
 
+    frame_count_for_trajectory = max(total_frames, n_frames)
+    if abs(total_frames - n_frames) > 1:
+        warnings.warn(
+            (
+                "Frame count mismatch between OpenCV metadata and tracker output "
+                f"(opencv={total_frames}, tracker={n_frames}); "
+                f"using {frame_count_for_trajectory} frames for crop trajectory."
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     # Step 3: Build smooth crop trajectory
     cx_arr, cy_arr, crop_w, crop_h = _build_crop_trajectory(
         detections,
-        total_frames=n_frames,
+        total_frames=frame_count_for_trajectory,
         video_w=video_w,
         video_h=video_h,
         pad=args.padding,
