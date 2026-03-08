@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from snowclaw.crop import (
+    _build_continuous_detections,
     _build_crop_trajectory,
     _render_crop_opencv,
     _select_track,
@@ -72,6 +73,19 @@ class TestSelectTrack:
             _select_track(tracks, track_id=999)
 
 
+class TestBuildContinuousDetections:
+    def test_stitches_fragmented_track_ids(self):
+        # Same person fragmented into 3 IDs over time
+        tracks = {
+            1: [(0, 0, 0, 10, 10), (1, 1, 0, 11, 10)],
+            2: [(2, 2, 0, 12, 10), (3, 3, 0, 13, 10)],
+            3: [(4, 4, 0, 14, 10)],
+        }
+        dets = _build_continuous_detections(tracks, total_frames=5, seed_track_id=2)
+        frames = [d[0] for d in dets]
+        assert frames == [0, 1, 2, 3, 4]
+
+
 class TestBuildCropTrajectory:
     def _make_detections(self, n=20, cx=424, cy=238, bw=80, bh=120):
         """Synthetic detections for a stationary person."""
@@ -114,6 +128,15 @@ class TestBuildCropTrajectory:
         )
         assert cw % 2 == 0
         assert ch % 2 == 0
+
+    def test_crop_preserves_input_aspect_ratio(self):
+        dets = self._make_detections(n=20, bw=120, bh=200)
+        _, _, cw, ch = _build_crop_trajectory(
+            dets, total_frames=20, video_w=1920, video_h=1080
+        )
+        in_ar = 1920 / 1080
+        out_ar = cw / ch
+        assert abs(out_ar - in_ar) < 0.03
 
     def test_centre_interpolated_to_all_frames(self):
         # Only every 5th frame has a detection; result should cover all 100 frames

@@ -72,7 +72,7 @@ def _track_persons(
 
 
 def _select_track(tracks: dict[int, list[tuple]], track_id: int | None) -> int:
-    """Choose a track ID: explicit selection or the one with the largest total bbox area."""
+    """Choose a seed track ID: explicit selection or the one with largest total area."""
     if track_id is not None:
         if track_id not in tracks:
             available = sorted(tracks.keys())
@@ -83,14 +83,61 @@ def _select_track(tracks: dict[int, list[tuple]], track_id: int | None) -> int:
             sys.exit(1)
         return track_id
 
-    # Auto-select: largest cumulative bounding-box area (= most prominent / closest person)
+    # Auto-select seed: largest cumulative bbox area (= most prominent track segment)
     def total_area(tid: int) -> float:
         return sum((x2 - x1) * (y2 - y1) for _, x1, y1, x2, y2 in tracks[tid])
 
     chosen = max(tracks.keys(), key=total_area)
-    print(f"  Auto-selected track ID {chosen} (largest cumulative area)")
+    print(f"  Auto-selected seed track ID {chosen} (largest cumulative area)")
     return chosen
 
+
+def _build_continuous_detections(
+    tracks: dict[int, list[tuple]],
+    total_frames: int,
+    seed_track_id: int,
+) -> list[tuple]:
+    """Stitch fragmented track IDs into one continuous detection stream.
+
+    For each frame, pick the detection closest to the previous chosen center.
+    This handles ByteTrack ID fragmentation (same skier split across IDs).
+    """
+    frame_map: dict[int, list[tuple]] = {}
+    for tid, dets in tracks.items():
+        for f, x1, y1, x2, y2 in dets:
+            frame_map.setdefault(int(f), []).append((tid, x1, y1, x2, y2))
+
+    chosen: list[tuple] = []
+    prev_cx = prev_cy = None
+
+    for f in range(total_frames):
+        cands = frame_map.get(f, [])
+        if not cands:
+            continue
+
+        if prev_cx is None:
+            # Prefer seed track at start if present on this frame.
+            seed = [c for c in cands if c[0] == seed_track_id]
+            if seed:
+                _, x1, y1, x2, y2 = max(seed, key=lambda c: (c[3]-c[1]) * (c[4]-c[2]))
+            else:
+                _, x1, y1, x2, y2 = max(cands, key=lambda c: (c[3]-c[1]) * (c[4]-c[2]))
+        else:
+            def score(c: tuple) -> tuple:
+                _, x1, y1, x2, y2 = c
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                dist2 = (cx - prev_cx) ** 2 + (cy - prev_cy) ** 2
+                area = (x2 - x1) * (y2 - y1)
+                return (dist2, -area)
+
+            _, x1, y1, x2, y2 = min(cands, key=score)
+
+        prev_cx = (x1 + x2) / 2
+        prev_cy = (y1 + y2) / 2
+        chosen.append((f, x1, y1, x2, y2))
+
+    return chosen
 
 def _build_crop_trajectory(
     detections: list[tuple],
@@ -128,14 +175,33 @@ def _build_crop_trajectory(
     bh_arr = _smooth(bh_raw, smooth_window)
 
     # Fixed crop size: 90th-percentile bbox + padding (avoids size oscillation)
+    # Keep crop aspect ratio equal to input video ratio to avoid distortion.
     med_bw = float(np.percentile(bw_arr, 90))
     med_bh = float(np.percentile(bh_arr, 90))
     base_crop_w = max(int(med_bw * (1 + pad * 2)), 64)
     base_crop_h = max(int(med_bh * (1 + pad * 2)), 64)
+
+    target_aspect = video_w / max(video_h, 1)
+    if base_crop_w / max(base_crop_h, 1) > target_aspect:
+        # too wide -> increase height
+        base_crop_h = int(round(base_crop_w / target_aspect))
+    else:
+        # too tall -> increase width
+        base_crop_w = int(round(base_crop_h * target_aspect))
+
     max_even_w = (video_w & ~1) or video_w
     max_even_h = (video_h & ~1) or video_h
     crop_w = min(base_crop_w, max_even_w)
     crop_h = min(base_crop_h, max_even_h)
+
+    # Re-apply aspect after clamping (fit inside frame).
+    if crop_w / max(crop_h, 1) > target_aspect:
+        crop_w = int(round(crop_h * target_aspect))
+    else:
+        crop_h = int(round(crop_w / target_aspect))
+
+    crop_w = max(2, min(crop_w, video_w))
+    crop_h = max(2, min(crop_h, video_h))
     if crop_w > 1 and crop_w % 2:
         crop_w -= 1
     if crop_h > 1 and crop_h % 2:
@@ -250,11 +316,8 @@ def run_crop(args) -> int:
         print("Error: No persons detected in video.", file=sys.stderr)
         return 1
 
-    # Step 2: Select which person to follow
+    # Step 2: Select which person to follow (seed track), then stitch fragmented IDs.
     chosen_id = _select_track(tracks, args.track_id)
-    detections = sorted(tracks[chosen_id], key=lambda d: d[0])
-    print(f"  Tracking person #{chosen_id} across {len(detections)} frames")
-
     frame_count_for_trajectory = max(total_frames, n_frames)
     if abs(total_frames - n_frames) > 1:
         warnings.warn(
@@ -267,6 +330,17 @@ def run_crop(args) -> int:
             stacklevel=2,
         )
 
+    if args.track_id is None:
+        detections = _build_continuous_detections(tracks, frame_count_for_trajectory, chosen_id)
+        coverage = len(detections) / max(frame_count_for_trajectory, 1)
+        print(
+            f"  Continuous target built from fragmented tracks (seed #{chosen_id}); "
+            f"coverage {len(detections)}/{frame_count_for_trajectory} ({coverage*100:.1f}%)"
+        )
+    else:
+        detections = sorted(tracks[chosen_id], key=lambda d: d[0])
+        print(f"  Tracking person #{chosen_id} across {len(detections)} frames")
+
     # Step 3: Build smooth crop trajectory
     cx_arr, cy_arr, crop_w, crop_h = _build_crop_trajectory(
         detections,
@@ -277,6 +351,18 @@ def run_crop(args) -> int:
         smooth_window=args.smooth,
     )
     zoom = video_w / crop_w
+
+    # Enforce output aspect ratio = input aspect ratio (no stretching)
+    out_w = int(args.out_width)
+    out_h = max(2, int(round(out_w * video_h / max(video_w, 1))))
+    if out_h % 2:
+        out_h += 1
+    if args.out_height != out_h:
+        print(
+            f"  Adjusted output size to preserve input aspect ratio: "
+            f"{args.out_width}x{args.out_height} -> {out_w}x{out_h}"
+        )
+
     print(f"  Crop window: {crop_w}x{crop_h}px  (zoom ~{zoom:.1f}x)")
 
     # Step 4: Render
@@ -284,7 +370,7 @@ def run_crop(args) -> int:
     _render_crop_opencv(
         video_path, cx_arr, cy_arr, crop_w, crop_h,
         video_w, video_h, output_path,
-        out_w=args.out_width, out_h=args.out_height, fps=fps,
+        out_w=out_w, out_h=out_h, fps=fps,
     )
 
     print(f"\nDone! → {output_path}")
