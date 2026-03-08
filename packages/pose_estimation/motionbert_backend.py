@@ -101,10 +101,22 @@ def _apply_temporal_smoothing(
         Smoothed array of same shape.
     """
     n = joints_3d.shape[0]
-    if n < window_length:
-        window_length = n if n % 2 == 1 else max(n - 1, polyorder + 1)
-    if window_length <= polyorder:
-        return joints_3d  # Too few frames to smooth
+    if n <= polyorder:
+        return joints_3d.copy()  # Too few frames to smooth
+
+    # Savitzky-Golay requires odd window_length <= n and > polyorder.
+    window_length = min(window_length, n)
+    if window_length % 2 == 0:
+        window_length -= 1
+
+    min_valid_window = polyorder + 1
+    if min_valid_window % 2 == 0:
+        min_valid_window += 1
+
+    if window_length < min_valid_window:
+        if n < min_valid_window:
+            return joints_3d.copy()
+        window_length = min_valid_window
 
     smoothed = joints_3d.copy()
     num_joints = joints_3d.shape[1]
@@ -153,6 +165,11 @@ class MotionBERTBackend(PoseLifter3D):
             smoothing_window: Savitzky-Golay window length for temporal smoothing.
             smoothing_poly: SG polynomial order.
         """
+        if smoothing_window <= 0:
+            raise ValueError(f"smoothing_window must be > 0, got {smoothing_window}")
+        if smoothing_poly < 0:
+            raise ValueError(f"smoothing_poly must be >= 0, got {smoothing_poly}")
+
         self._model_path = model_path
         self._model = None
         self._device_pref = device
